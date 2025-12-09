@@ -1,0 +1,459 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #05070a;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  color: #f5f5f5;
+}
+
+/* Wrapper so UI lines up with canvas */
+#game-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+
+/* Canvas styling */
+#gameCanvas {
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+  border: 2px solid #222;
+  background: radial-gradient(circle at center, #101826, #05070a);
+  display: block;
+}
+
+/* UI overlay container (sits on top of canvas) */
+#ui-container {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* UI panels will override this */
+}
+
+/* Panels (menus, HUD) */
+.panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  pointer-events: auto;
+}
+
+.hidden {
+  display: none;
+}
+
+/* Main Menu styling */
+#main-menu h1 {
+  font-size: 42px;
+  letter-spacing: 2px;
+  margin-bottom: 10px;
+}
+
+#main-menu .subtitle {
+  margin-bottom: 20px;
+  color: #b0b8c6;
+}
+
+#main-menu button {
+  margin: 6px 0;
+  padding: 10px 20px;
+  font-size: 16px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  background: #2b59ff;
+  color: white;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+#main-menu button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+}
+
+#multi-note {
+  margin-top: 16px;
+  font-size: 13px;
+  color: #a2acbd;
+  max-width: 420px;
+  text-align: center;
+}
+
+/* HUD styling */
+#hud {
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 10px 16px;
+  pointer-events: none; /* only Exit button clickable */
+}
+
+#hud-left span {
+  margin-right: 24px;
+  font-size: 16px;
+}
+
+#hud-right {
+  margin-left: auto;
+}
+
+#btn-exit {
+  pointer-events: auto;
+  padding: 6px 14px;
+  font-size: 14px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  background: #c92a2a;
+  color: white;
+}
+
+/* Multiplayer placeholder panel */
+#multi-coming h2 {
+  font-size: 28px;
+  margin-bottom: 10px;
+}
+
+#multi-coming p {
+  max-width: 460px;
+  text-align: center;
+  margin-bottom: 16px;
+  color: #cfd6e6;
+}
+
+#multi-coming button {
+  padding: 8px 16px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  background: #2b59ff;
+  color: white;
+}
+/* ===== MAIN MENU LAYOUT ===== */
+
+#menu-inner {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  max-width: 900px;
+  gap: 40px;  /* space between color panel + buttons */
+}
+
+/* LEFT side (color picker) */
+#menu-left {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* CENTER (title + buttons) */
+#menu-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ===== COLOR PICKER PANEL ===== */
+
+#color-picker-container {
+  padding: 14px 16px;
+  background: #070a10;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  text-align: center;
+  width: 260px;
+
+  box-shadow: 0 3px 10px rgba(0,0,0,0.45);
+}
+
+#color-picker-container h3 {
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  font-size: 14px;
+  color: #e1e7f5;
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+#color-picker-container label {
+  font-size: 13px;
+  color: #c0c7d9;
+}
+
+#color-picker {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 2px solid #2b59ff;
+  background: #05070a;
+  cursor: pointer;
+}
+
+#color-picker:hover {
+  border-color: #5277ff;
+}
+
+.preview-label {
+  margin: 6px 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  color: #9aa4b7;
+}
+
+#preview-canvas {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: radial-gradient(circle at center, #101826, #05070a);
+}
+/* ===== MAIN MENU LAYOUT (already added earlier) ===== */
+
+#menu-inner {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  max-width: 900px;
+  gap: 40px;
+}
+
+#menu-left {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+#menu-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ===== COLOR PICKER PANEL (slider-based) ===== */
+
+#color-picker-container {
+  padding: 14px 16px;
+  background: #070a10;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  text-align: center;
+  width: 260px;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.45);
+}
+
+#color-picker-container h3 {
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  font-size: 14px;
+  color: #e1e7f5;
+}
+
+/* Swatch row */
+
+#color-swatch-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.swatch-label {
+  font-size: 12px;
+  color: #c0c7d9;
+}
+
+#color-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.25);
+  background: #32e0ff; /* initial matches sliders */
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.7);
+}
+
+/* Slider rows */
+
+.slider-row {
+  display: grid;
+  grid-template-columns: 18px 1fr 38px;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.slider-row label {
+  font-size: 11px;
+  color: #c0c7d9;
+}
+
+.slider-row input[type="range"] {
+  width: 100%;
+}
+
+.slider-val {
+  font-size: 11px;
+  color: #9aa4b7;
+  text-align: right;
+}
+
+/* Preview label + canvas */
+
+.preview-label {
+  margin: 8px 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9aa4b7;
+}
+
+#preview-canvas {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: radial-gradient(circle at center, #101826, #05070a);
+}
+/* ===== Ability HUD at bottom ===== */
+
+#hud-abilities {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  pointer-events: none; /* purely visual */
+}
+
+.ability-slot {
+  position: relative;
+  width: 50px;
+  height: 50px;
+  border-radius: 8px;
+  background: #05070a;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+/* generic icon box */
+.ability-icon {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* Tentacle icon: spiral-ish */
+.icon-tentacle::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border-radius: 50%;
+  border: 2px solid #32e0ff;
+  box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.8);
+}
+.icon-tentacle::after {
+  content: "";
+  position: absolute;
+  left: 22px;
+  top: 8px;
+  width: 6px;
+  height: 24px;
+  border-radius: 999px;
+  background: linear-gradient(#32e0ff, #9af0ff);
+}
+
+/* Dash icon: arrow */
+.icon-dash::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  top: 22px;
+  height: 6px;
+  border-radius: 999px;
+  background: #ffb347;
+}
+.icon-dash::after {
+  content: "";
+  position: absolute;
+  right: 9px;
+  top: 17px;
+  border-style: solid;
+  border-width: 7px 0 7px 10px;
+  border-color: transparent transparent transparent #ffb347;
+}
+
+/* Shield icon */
+.icon-shield::before {
+  content: "";
+  position: absolute;
+  left: 15px;
+  right: 15px;
+  top: 10px;
+  bottom: 14px;
+  background: #5ad08a;
+  clip-path: polygon(50% 0%, 100% 25%, 80% 100%, 20% 100%, 0% 25%);
+}
+
+/* Key hint text */
+.ability-key {
+  position: absolute;
+  bottom: -2px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  text-transform: uppercase;
+  color: #cfd6e6;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.7);
+}
+
+/* Cooldown overlay (fills from bottom → top) */
+.cooldown-overlay {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 0%;
+  background: rgba(0, 0, 0, 0.65);
+  transition: height 0.05s linear;
+}
+
+/* Locked (wrong life stage) – draw an X */
+.ability-slot.ability-locked::after {
+  content: "✕";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  color: rgba(255, 80, 80, 0.9);
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.9);
+}
+
+/* Slight color accent when fully ready */
+.ability-slot.ability-ready {
+  border-color: rgba(50, 224, 255, 0.9);
+}
