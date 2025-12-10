@@ -13,88 +13,103 @@
     <div id="ui-container">
       <!-- MAIN MENU -->
       <div id="main-menu" class="panel">
+        <div id="menu-inner">
+          <!-- LEFT: Color + Name -->
+          <div id="menu-left">
+            <div id="color-picker-container">
+              <h3>Select Parasite Color</h3>
 
-  <div id="menu-inner">
-   <div id="color-picker-container">
-  <h3>Select Parasite Color</h3>
+              <div id="color-swatch-row">
+                <span class="swatch-label">Current</span>
+                <div id="color-swatch"></div>
+              </div>
 
-  <div id="color-swatch-row">
-    <span class="swatch-label">Current</span>
-    <div id="color-swatch"></div>
-  </div>
+              <div class="slider-row">
+                <label for="color-r">R</label>
+                <input type="range" id="color-r" min="0" max="255" value="50" />
+                <span id="color-r-val" class="slider-val">50</span>
+              </div>
 
-  <div class="slider-row">
-    <label for="color-r">R</label>
-    <input type="range" id="color-r" min="0" max="255" value="50">
-    <span id="color-r-val" class="slider-val">50</span>
-  </div>
+              <div class="slider-row">
+                <label for="color-g">G</label>
+                <input type="range" id="color-g" min="0" max="255" value="224" />
+                <span id="color-g-val" class="slider-val">224</span>
+              </div>
 
-  <div class="slider-row">
-    <label for="color-g">G</label>
-    <input type="range" id="color-g" min="0" max="255" value="224">
-    <span id="color-g-val" class="slider-val">224</span>
-  </div>
+              <div class="slider-row">
+                <label for="color-b">B</label>
+                <input type="range" id="color-b" min="0" max="255" value="255" />
+                <span id="color-b-val" class="slider-val">255</span>
+              </div>
 
-  <div class="slider-row">
-    <label for="color-b">B</label>
-    <input type="range" id="color-b" min="0" max="255" value="255">
-    <span id="color-b-val" class="slider-val">255</span>
-  </div>
+              <!-- Player name input -->
+              <div id="name-row">
+                <label for="player-name">Parasite Name</label>
+                <input
+                  type="text"
+                  id="player-name"
+                  maxlength="18"
+                  placeholder="You"
+                />
+              </div>
 
-  <p class="preview-label">Lifecycle Preview</p>
-  <canvas id="preview-canvas" width="320" height="120"></canvas>
-</div>
+              <p class="preview-label">Lifecycle Preview</p>
+              <canvas id="preview-canvas" width="320" height="120"></canvas>
+            </div>
+          </div>
 
+          <!-- CENTER: Title + Buttons -->
+          <div id="menu-center">
+            <h1>Chrono Parasite</h1>
+            <p class="subtitle">Leech time. Age your enemies. Survive.</p>
 
-    <!-- CENTER: Title + Buttons -->
-    <div id="menu-center">
-      <h1>Chrono Parasite</h1>
-      <p class="subtitle">Leech time. Age your enemies. Survive.</p>
+            <button id="btn-how-to-play">How to Play</button>
 
-      <button id="btn-single">Single Player (vs AI)</button>
-      <button id="btn-multi">Multiplayer (Online)</button>
+            <button id="btn-single">Single Player (vs AI)</button>
+            <button id="btn-multi">Multiplayer (Online)</button>
 
-      <p id="multi-note">
-        We’ll build single player first. Multiplayer will plug into the same core later.
-      </p>
-    </div>
-  </div>
-
-</div>
-
+            <p id="multi-note">
+              We’ll build single player first. Multiplayer will plug into the same core later.
+            </p>
+          </div>
+        </div>
+      </div>
 
       <!-- HUD DURING GAME -->
       <div id="hud" class="panel hidden">
-  <div id="hud-left">
-    <span id="hud-time">Time: 60</span>
-    <span id="hud-age">Age: Young</span>
-  </div>
-  <div id="hud-right">
-    <button id="btn-exit">Exit to Menu</button>
-  </div>
+        <!-- Top HUD -->
+        <div id="hud-left">
+          <span id="hud-time">Time: 60</span>
+          <span id="hud-age">Age: Young</span>
+        </div>
+        <div id="hud-right">
+          <button id="btn-exit">Exit to Menu</button>
+        </div>
 
-  <!-- Ability icons at bottom center -->
-  <div id="hud-abilities">
-    <div class="ability-slot" id="ability-tentacle">
-      <div class="ability-icon icon-tentacle"></div>
-      <div class="cooldown-overlay"></div>
-      <div class="ability-key">LMB</div>
-    </div>
+        <!-- Leaderboard (top-left) -->
+        <div id="leaderboard"></div>
 
-    <div class="ability-slot" id="ability-dash">
-      <div class="ability-icon icon-dash"></div>
-      <div class="cooldown-overlay"></div>
-      <div class="ability-key">RMB</div>
-    </div>
+        <!-- Ability icons at bottom center -->
+        <div id="hud-abilities">
+          <div class="ability-slot" id="ability-tentacle">
+            <div class="ability-icon icon-tentacle"></div>
+            <div class="cooldown-overlay"></div>
+            <div class="ability-key">LMB</div>
+          </div>
 
-    <div class="ability-slot" id="ability-shield">
-      <div class="ability-icon icon-shield"></div>
-      <div class="cooldown-overlay"></div>
-      <div class="ability-key">SPACE</div>
-    </div>
-  </div>
-</div>
+          <div class="ability-slot" id="ability-dash">
+            <div class="ability-icon icon-dash"></div>
+            <div class="cooldown-overlay"></div>
+            <div class="ability-key">RMB</div>
+          </div>
 
+          <div class="ability-slot" id="ability-shield">
+            <div class="ability-icon icon-shield"></div>
+            <div class="cooldown-overlay"></div>
+            <div class="ability-key">SPACE</div>
+          </div>
+        </div>
+      </div>
 
       <!-- MULTIPLAYER PLACEHOLDER SCREEN -->
       <div id="multi-coming" class="panel hidden">
@@ -104,6 +119,51 @@
           For now, test the mechanics in Single Player mode.
         </p>
         <button id="btn-back-from-multi">Back to Menu</button>
+      </div>
+
+      <!-- HOW TO PLAY PANEL -->
+      <div id="how-to-play-panel" class="panel hidden">
+        <div id="how-to-box">
+          <h2>How to Play</h2>
+          <p class="how-subtitle">
+            Drain time, evolve, and outlast every other parasite in the arena.
+          </p>
+
+          <div class="how-section">
+            <h3>Objective</h3>
+            <p>
+              Stay alive by stealing time from orbs and other parasites.
+              More time = you age from Young → Adult → Elder, unlocking new abilities.
+            </p>
+            <ul>
+              <li><strong>Young:</strong> Fast, only Tentacle.</li>
+              <li><strong>Adult:</strong> Gains Dash.</li>
+              <li><strong>Elder:</strong> Gains Shield / Parry.</li>
+            </ul>
+          </div>
+
+          <div class="how-section">
+            <h3>Controls</h3>
+            <ul>
+              <li><strong>Move:</strong> WASD or Arrow Keys</li>
+              <li><strong>Primary – Tentacle (LMB):</strong> Aim with the mouse, click to latch and drain time.</li>
+              <li><strong>Secondary – Dash (RMB, Adult+):</strong> Burst forward. On hit, steal a big chunk of time; on miss, lose time.</li>
+              <li><strong>Shield / Parry (SPACE, Elder):</strong> Brief barrier. If an enemy hits you, they lose time and are slowed.</li>
+            </ul>
+          </div>
+
+          <div class="how-section">
+            <h3>Tips</h3>
+            <ul>
+              <li>Eat orbs early to reach Adult quickly.</li>
+              <li>Use Tentacle at max range to stay safer.</li>
+              <li>Dash is high risk, high reward — use it to finish weakened enemies.</li>
+              <li>Elder shield can turn an enemy’s attack into your advantage.</li>
+            </ul>
+          </div>
+
+          <button id="btn-how-back">Back to Menu</button>
+        </div>
       </div>
     </div>
   </div>
