@@ -32,9 +32,9 @@ const ELDER_RADIUS = 28;
 
 // Tentacle (Time Parasite ability) - primary
 const TENTACLE_COST = 8;             // seconds spent to cast
-const TENTACLE_MAX_DURATION = 3;     // seconds while latched
+const TENTACLE_MAX_DURATION = 3;     // seconds while latched (also used for tether duration)
 const TENTACLE_MAX_RANGE = 400;      // max extension
-const TENTACLE_BREAK_RANGE = 450;    // if farther than this while latched -> break
+const TENTACLE_BREAK_RANGE = 450;    // if farther than this while latched/tethered -> break
 const TENTACLE_DRAIN_RATE = 6;       // victim loses this many "seconds per second"
 const TENTACLE_EFFICIENCY = 0.7;     // how much of drained time you actually gain
 const TENTACLE_EXTEND_SPEED = 1100;  // units per second for extend/retract
@@ -63,6 +63,25 @@ const DASH_COOLDOWN = 3.0;
 
 // Leaderboard scoring – how much each kill is "worth" in seconds
 const KILL_WEIGHT_FOR_LEADERBOARD = 60;
+
+// ===== Barriers / Obstacles =====
+const OBSTACLE_COUNT = 12;
+const OBSTACLE_RADIUS_MIN = 28;
+const OBSTACLE_RADIUS_MAX = 60;
+
+// ===== Tentacle -> Barrier Tether =====
+const TETHER_SPEED_MULT = 1.45;     // speed boost while tethered
+const TETHER_BUMP_KNOCKBACK = 420;  // how hard you knock others away
+const TETHER_BUMP_STUN = 0.12;      // small stagger
+const TETHER_BUMP_COOLDOWN = 0.18;  // prevents multi-hits every frame
+
+// ===== Background / Ambience =====
+const STAR_COUNT = 260;
+const STAR_SPEED_MIN = 6;
+const STAR_SPEED_MAX = 18;
+
+const RIPPLE_MIN_INTERVAL = 2.8;   // seconds
+const RIPPLE_MAX_INTERVAL = 6.5;   // seconds
 
 // Bot name pool
 const BOT_NAMES = [
@@ -168,11 +187,11 @@ let gameOver = false;
 // Orbs scattered in the world
 let orbs = [];
 
+// Obstacles / barriers
+let obstacles = [];
+
 // Simple camera that follows the player
-const camera = {
-  x: 0,
-  y: 0
-};
+const camera = { x: 0, y: 0 };
 
 // Dash is still global (one dash at a time total)
 let activeDash = null;
@@ -210,7 +229,6 @@ window.addEventListener("keydown", e => {
     startSinglePlayer();
   }
 });
-
 window.addEventListener("keyup", e => {
   keys[e.key.toLowerCase()] = false;
 });
@@ -218,6 +236,140 @@ window.addEventListener("keyup", e => {
 // Player cooldown timers
 let tentacleCooldown = 0;
 let dashCooldown = 0;
+
+// =====================
+// BACKGROUND STATE
+// =====================
+let bgStars = [];
+let bgRipples = [];
+let nextRippleTimer = randRange(RIPPLE_MIN_INTERVAL, RIPPLE_MAX_INTERVAL);
+
+function initBackground() {
+  bgStars = [];
+  for (let i = 0; i < STAR_COUNT; i++) {
+    bgStars.push({
+      x: Math.random() * CANVAS_WIDTH,
+      y: Math.random() * CANVAS_HEIGHT,
+      r: randRange(0.6, 1.8),
+      tw: randRange(0, Math.PI * 2),
+      sp: randRange(STAR_SPEED_MIN, STAR_SPEED_MAX),
+      par: randRange(0.15, 0.55) // parallax strength
+    });
+  }
+  bgRipples = [];
+  nextRippleTimer = randRange(RIPPLE_MIN_INTERVAL, RIPPLE_MAX_INTERVAL);
+}
+
+function spawnTimeRipple() {
+  bgRipples.push({
+    x: randRange(0.15 * CANVAS_WIDTH, 0.85 * CANVAS_WIDTH),
+    y: randRange(0.15 * CANVAS_HEIGHT, 0.85 * CANVAS_HEIGHT),
+    age: 0,
+    lifetime: randRange(1.2, 2.2),
+    startR: randRange(12, 26),
+    growth: randRange(320, 540),
+    rot: randRange(0, Math.PI * 2)
+  });
+}
+
+function updateBackground(dt) {
+  // Star drift + wrap
+  for (const s of bgStars) {
+    // Gentle drift downward/right
+    s.x += (s.sp * 0.45) * dt;
+    s.y += (s.sp * 0.85) * dt;
+
+    // Wrap
+    if (s.x > CANVAS_WIDTH + 10) s.x = -10;
+    if (s.y > CANVAS_HEIGHT + 10) s.y = -10;
+
+    s.tw += dt * randRange(0.8, 1.6);
+  }
+
+  // Ripples
+  for (let i = bgRipples.length - 1; i >= 0; i--) {
+    bgRipples[i].age += dt;
+    if (bgRipples[i].age >= bgRipples[i].lifetime) {
+      bgRipples.splice(i, 1);
+    }
+  }
+
+  // Random ripple events
+  nextRippleTimer -= dt;
+  if (nextRippleTimer <= 0) {
+    spawnTimeRipple();
+    nextRippleTimer = randRange(RIPPLE_MIN_INTERVAL, RIPPLE_MAX_INTERVAL);
+  }
+}
+
+function drawBackgroundScreenSpace(ctx) {
+  // Base vignette / nebula
+  ctx.save();
+  const g = ctx.createRadialGradient(
+    CANVAS_WIDTH * 0.5, CANVAS_HEIGHT * 0.45, 20,
+    CANVAS_WIDTH * 0.5, CANVAS_HEIGHT * 0.55, Math.max(CANVAS_WIDTH, CANVAS_HEIGHT) * 0.75
+  );
+  g.addColorStop(0, "rgba(14, 22, 38, 0.9)");
+  g.addColorStop(0.55, "rgba(6, 10, 18, 0.95)");
+  g.addColorStop(1, "rgba(4, 6, 10, 1)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  ctx.restore();
+
+  // Stars
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  for (const s of bgStars) {
+    // Parallax responds to camera (during game) — menu uses camera at 0
+    const camX = (currentScreen === "single" && player) ? camera.x : WORLD_WIDTH / 2;
+    const camY = (currentScreen === "single" && player) ? camera.y : WORLD_HEIGHT / 2;
+
+    // Map camera motion into small screen offsets
+    const ox = ((camX / WORLD_WIDTH) - 0.5) * CANVAS_WIDTH * s.par;
+    const oy = ((camY / WORLD_HEIGHT) - 0.5) * CANVAS_HEIGHT * s.par;
+
+    const x = s.x - ox;
+    const y = s.y - oy;
+
+    const twinkle = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(s.tw));
+    ctx.fillStyle = `rgba(220, 245, 255, ${0.12 + twinkle * 0.22})`;
+    ctx.beginPath();
+    ctx.arc(x, y, s.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // Time fracture ripples (screen-space)
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  for (const r of bgRipples) {
+    const t = r.age / r.lifetime; // 0..1
+    const rad = r.startR + r.growth * t;
+    const a = (1 - t);
+
+    // main ring
+    ctx.strokeStyle = `rgba(120, 255, 230, ${0.12 * a})`;
+    ctx.lineWidth = 3 * (1 - t * 0.6);
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, rad, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // secondary arc "fracture"
+    ctx.strokeStyle = `rgba(255,255,255, ${0.08 * a})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, rad * 0.72, r.rot + t * 2.2, r.rot + t * 2.2 + Math.PI * 1.2);
+    ctx.stroke();
+
+    // subtle chroma edge
+    ctx.strokeStyle = `rgba(120, 160, 255, ${0.07 * a})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, rad * 1.05, r.rot - t * 1.1, r.rot - t * 1.1 + Math.PI * 0.8);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 
 // =====================
 // ENEMY / FFA HELPERS
@@ -255,6 +407,63 @@ function findClosestEnemy(self, maxDistance = Infinity) {
   }
 
   return { enemy: best, dist: bestDist };
+}
+
+// =====================
+// OBSTACLES: SPAWN + COLLISION + LOS
+// =====================
+function spawnObstacles(count) {
+  obstacles = [];
+
+  for (let i = 0; i < count; i++) {
+    const r = randRange(OBSTACLE_RADIUS_MIN, OBSTACLE_RADIUS_MAX);
+    const x = randRange(r + 40, WORLD_WIDTH - r - 40);
+    const y = randRange(r + 40, WORLD_HEIGHT - r - 40);
+
+    obstacles.push({ x, y, r });
+  }
+}
+
+// Push a blob out of overlapping obstacles
+function resolveBlobObstacleCollisions(blob) {
+  for (const o of obstacles) {
+    const dx = blob.x - o.x;
+    const dy = blob.y - o.y;
+    const d = Math.hypot(dx, dy) || 0.0001;
+    const minD = blob.radius + o.r;
+
+    if (d < minD) {
+      const nx = dx / d;
+      const ny = dy / d;
+
+      const push = (minD - d) + 0.5;
+      blob.x += nx * push;
+      blob.y += ny * push;
+
+      blob.clampToWorld();
+    }
+  }
+}
+
+// Does a segment from A->B intersect any obstacle circle?
+function hasLineOfSight(a, b) {
+  const ax = a.x, ay = a.y;
+  const bx = b.x, by = b.y;
+
+  const vx = bx - ax;
+  const vy = by - ay;
+  const vv = vx * vx + vy * vy;
+
+  for (const o of obstacles) {
+    const t = vv > 0 ? ((o.x - ax) * vx + (o.y - ay) * vy) / vv : 0;
+    const tt = clamp(t, 0, 1);
+    const px = ax + vx * tt;
+    const py = ay + vy * tt;
+    const d = distance(px, py, o.x, o.y);
+
+    if (d <= o.r + 2) return false;
+  }
+  return true;
 }
 
 // =====================
@@ -415,11 +624,47 @@ class Orb {
   }
 
   draw(ctx) {
+    // Time-themed "chronosphere" orb
+    const t = gameTime;
+
     ctx.save();
-    ctx.fillStyle = "#ffe066";
+
+    // Outer glow
+    const g = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius * 3.2);
+    g.addColorStop(0, "rgba(140, 255, 235, 0.55)");
+    g.addColorStop(0.4, "rgba(120, 160, 255, 0.25)");
+    g.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.arc(this.x, this.y, this.radius * 3.2, 0, Math.PI * 2);
     ctx.fill();
+
+    // Core
+    const core = ctx.createRadialGradient(
+      this.x - this.radius * 0.25,
+      this.y - this.radius * 0.25,
+      this.radius * 0.2,
+      this.x,
+      this.y,
+      this.radius * 1.4
+    );
+    core.addColorStop(0, "rgba(255,255,255,0.95)");
+    core.addColorStop(0.35, "rgba(120, 255, 230, 0.9)");
+    core.addColorStop(1, "rgba(10, 12, 20, 0.85)");
+
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius * (1 + 0.18 * Math.sin(t * 5)), 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tiny rotating ring
+    ctx.globalCompositeOperation = "screen";
+    ctx.strokeStyle = "rgba(255,255,255,0.28)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius * 1.9, t * 0.8, t * 0.8 + Math.PI * 1.4);
+    ctx.stroke();
+
     ctx.restore();
   }
 }
@@ -455,6 +700,9 @@ class BlobBase {
     this.kills = 0;
     this.lastHitBy = null;
 
+    // Tether bump gating
+    this.tetherBumpCooldown = 0;
+
     // Visual wobble so they don't all pulse together
     this.wobblePhase = Math.random() * Math.PI * 2;
   }
@@ -472,7 +720,9 @@ class BlobBase {
   }
 
   getSpeed() {
-    return this.getBaseSpeed() * this.slowFactor;
+    const tetherBoost =
+      (this.tentacle && this.tentacle.phase === "tethered") ? TETHER_SPEED_MULT : 1;
+    return this.getBaseSpeed() * this.slowFactor * tetherBoost;
   }
 
   // Parasite's personal color (no longer age-based)
@@ -504,6 +754,10 @@ class BlobBase {
     if (this.shieldCooldown > 0) {
       this.shieldCooldown -= dt;
       if (this.shieldCooldown < 0) this.shieldCooldown = 0;
+    }
+    if (this.tetherBumpCooldown > 0) {
+      this.tetherBumpCooldown -= dt;
+      if (this.tetherBumpCooldown < 0) this.tetherBumpCooldown = 0;
     }
 
     // Update age & size
@@ -558,12 +812,14 @@ function drawParasiteBody(ctx, blob) {
   bodyGrad.addColorStop(0.25, baseColor);
   bodyGrad.addColorStop(1, "#050608");
 
-  // Tentacle count based on age (visual progression),
-  // but color remains the same baseColor.
+  // Tentacle count based on age
   let tentacles;
   if (blob.ageState === "Young") tentacles = 6;
   else if (blob.ageState === "Adult") tentacles = 10;
   else tentacles = 14;
+
+  // Shield visual: Elder spikes during shieldTimer
+  const isShielding = (blob.shieldTimer && blob.shieldTimer > 0);
 
   // Tentacles
   ctx.save();
@@ -573,7 +829,7 @@ function drawParasiteBody(ctx, blob) {
   for (let i = 0; i < tentacles; i++) {
     const angle =
       (i / tentacles) * Math.PI * 2 +
-      0.4 * Math.sin(t * 2 + i); // wiggly
+      0.4 * Math.sin(t * 2 + i);
 
     const lenBase =
       blob.ageState === "Young"
@@ -584,11 +840,33 @@ function drawParasiteBody(ctx, blob) {
 
     const len = lenBase * (1 + 0.12 * Math.sin(t * 3 + i * 1.3));
 
+    const x0 = blob.x;
+    const y0 = blob.y;
+
+    // Spikes when shielding
+    if (isShielding) {
+      const spikeLen = len * 0.85;
+      const xt = x0 + Math.cos(angle) * spikeLen;
+      const yt = y0 + Math.sin(angle) * spikeLen;
+
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(xt, yt);
+      ctx.stroke();
+
+      ctx.fillStyle = baseColor;
+      ctx.beginPath();
+      ctx.arc(xt, yt, 3.8, 0, Math.PI * 2);
+      ctx.fill();
+
+      continue;
+    }
+
     const midLen = len * 0.6;
     const tipLen = len;
 
-    const x0 = blob.x;
-    const y0 = blob.y;
     const xm = x0 + Math.cos(angle) * midLen;
     const ym = y0 + Math.sin(angle) * midLen;
     const xt = x0 + Math.cos(angle) * tipLen;
@@ -637,6 +915,17 @@ function drawParasiteBody(ctx, blob) {
     Math.PI * 2
   );
   ctx.fill();
+
+  // Extra shield aura
+  if (isShielding) {
+    ctx.globalCompositeOperation = "screen";
+    ctx.strokeStyle = "rgba(120,255,230,0.35)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(blob.x, blob.y, r * 1.15, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
   ctx.restore();
 }
 
@@ -659,12 +948,14 @@ class Player extends BlobBase {
     // Stunned can't move
     if (this.stunTimer > 0) {
       this.clampToWorld();
+      resolveBlobObstacleCollisions(this);
       return;
     }
 
     // If currently dashing, movement is handled by dash system
     if (activeDash && activeDash.source === this && activeDash.phase === "dashing") {
       this.clampToWorld();
+      resolveBlobObstacleCollisions(this);
       return;
     }
 
@@ -689,6 +980,7 @@ class Player extends BlobBase {
     }
 
     this.clampToWorld();
+    resolveBlobObstacleCollisions(this);
   }
 }
 
@@ -713,13 +1005,13 @@ class Bot extends BlobBase {
     // If stunned, do not move
     if (this.stunTimer > 0) {
       this.clampToWorld();
+      resolveBlobObstacleCollisions(this);
       return;
     }
 
     const speed = this.getSpeed();
     this.changeDirCooldown -= dt;
 
-    // Simple "state": low time = survival mode, otherwise hunt / roam
     const LOW_TIME_THRESHOLD = 40;
 
     if (this.changeDirCooldown <= 0) {
@@ -736,28 +1028,24 @@ class Bot extends BlobBase {
         }
       }
 
-      // Find closest enemy (player or other bots)
+      // Find closest enemy
       const { enemy: closestEnemy, dist: enemyDist } = findClosestEnemy(this);
 
       let angle;
 
       if (this.timeRemaining < LOW_TIME_THRESHOLD && targetOrb) {
-        // Low on time – prioritize orbs to stay alive
         const dx = targetOrb.x - this.x;
         const dy = targetOrb.y - this.y;
         angle = Math.atan2(dy, dx) + randRange(-0.3, 0.3);
       } else if (closestEnemy && enemyDist < 900) {
-        // Hunt nearest enemy within some range
         const dx = closestEnemy.x - this.x;
         const dy = closestEnemy.y - this.y;
         angle = Math.atan2(dy, dx) + randRange(-0.25, 0.25);
       } else if (targetOrb && bestOrbDist < 800) {
-        // No enemy in range – wander toward orbs
         const dx = targetOrb.x - this.x;
         const dy = targetOrb.y - this.y;
         angle = Math.atan2(dy, dx) + randRange(-0.4, 0.4);
       } else {
-        // Pure wandering
         angle = randRange(0, Math.PI * 2);
       }
 
@@ -771,19 +1059,20 @@ class Bot extends BlobBase {
     this.y += (this.dirY / len) * speed * dt;
 
     this.clampToWorld();
+    resolveBlobObstacleCollisions(this);
 
     // AI abilities – free-for-all logic
-
     const enemies = getEnemiesFor(this);
 
-    // Tentacle: any age can use (no cooldown for bots for now)
+    // Tentacle
     if (!this.tentacle && enemies.length > 0 && Math.random() < dt * 0.4 && this.timeRemaining > TENTACLE_COST) {
-      // Prefer closer targets
       const { enemy: tentacleTarget } = findClosestEnemy(this, TENTACLE_MAX_RANGE * 1.1);
       if (tentacleTarget) {
-        const dx = tentacleTarget.x - this.x;
-        const dy = tentacleTarget.y - this.y;
-        castTentacle(this, dx, dy);
+        if (hasLineOfSight(this, tentacleTarget)) {
+          const dx = tentacleTarget.x - this.x;
+          const dy = tentacleTarget.y - this.y;
+          castTentacle(this, dx, dy);
+        }
       }
     }
 
@@ -799,7 +1088,7 @@ class Bot extends BlobBase {
       }
     }
 
-    // Shield: Elder-only, reactive if enemies close
+    // Shield: Elder-only
     if (this.ageState === "Elder" && this.shieldCooldown <= 0 && this.shieldTimer <= 0) {
       const { enemy: closeEnemy } = findClosestEnemy(this, 350);
       if (closeEnemy && Math.random() < dt * 0.4) {
@@ -846,6 +1135,7 @@ function startSinglePlayer() {
   camera.y = player.y;
 
   spawnOrbs(ORB_COUNT);
+  spawnObstacles(OBSTACLE_COUNT);
   spawnBots(BOT_COUNT);
 
   dom.mainMenu.classList.add("hidden");
@@ -938,7 +1228,7 @@ function applyShieldParry(defender, attacker) {
   if (attacker.timeRemaining < 0) attacker.timeRemaining = 0;
 
   defender.timeRemaining += steal * SHIELD_STEAL_EFFICIENCY;
-  defender.lastHitBy = attacker; // if a parry kill happens, attacker gets credit
+  defender.lastHitBy = attacker;
 }
 
 // =====================
@@ -949,8 +1239,6 @@ function applyShieldParry(defender, attacker) {
 function tryUseTentacle() {
   if (currentScreen !== "single" || !player || gameOver) return;
 
-  // Player can only have one tentacle at a time.
-  // If it's retracting, let a new cast override it for snappier feel.
   if (player.tentacle) {
     if (player.tentacle.phase === "retracting") {
       player.tentacle = null;
@@ -976,7 +1264,6 @@ function castTentacle(caster, dirXOverride, dirYOverride) {
     dirX /= mag;
     dirY /= mag;
   } else {
-    // Only the player uses mouse aim
     if (caster !== player) return;
 
     const mouseWorldX = mouseScreenX - CANVAS_WIDTH / 2 + camera.x;
@@ -996,6 +1283,7 @@ function castTentacle(caster, dirXOverride, dirYOverride) {
   caster.tentacle = {
     source: caster,
     target: null,
+    targetObstacle: null,
     dirX,
     dirY,
     length: 0,
@@ -1020,7 +1308,6 @@ function updateTentacleFor(blob, dt) {
     return;
   }
 
-  // All potential targets are "enemies" of the source
   let potentialTargets = getEnemiesFor(source);
 
   if (t.phase === "extending") {
@@ -1033,16 +1320,33 @@ function updateTentacleFor(blob, dt) {
     const tipX = source.x + t.dirX * t.length;
     const tipY = source.y + t.dirY * t.length;
 
+    // 1) barrier tether
+    for (const o of obstacles) {
+      const dObs = distance(tipX, tipY, o.x, o.y);
+      if (dObs <= o.r) {
+        t.target = null;
+        t.targetObstacle = o;
+        t.phase = "tethered";
+        t.remaining = TENTACLE_MAX_DURATION;
+        return;
+      }
+    }
+
+    // 2) latch enemy (LOS required)
     for (const target of potentialTargets) {
       if (target.timeRemaining <= 0) continue;
+      if (!hasLineOfSight(source, target)) continue;
+
       const d = distance(tipX, tipY, target.x, target.y);
       if (d < target.radius) {
         if (target.shieldTimer > 0) {
           applyShieldParry(target, source);
           t.phase = "retracting";
           t.target = null;
+          t.targetObstacle = null;
         } else {
           t.target = target;
+          t.targetObstacle = null;
           t.phase = "latched";
           t.remaining = TENTACLE_MAX_DURATION;
         }
@@ -1065,9 +1369,7 @@ function updateTentacleFor(blob, dt) {
         target.timeRemaining -= drain;
         if (target.timeRemaining < 0) target.timeRemaining = 0;
 
-        // track last hitter for kill credit
         target.lastHitBy = source;
-
         source.timeRemaining += drain * TENTACLE_EFFICIENCY;
 
         t.remaining -= dt;
@@ -1076,6 +1378,28 @@ function updateTentacleFor(blob, dt) {
           t.target = null;
         }
       }
+    }
+  } else if (t.phase === "tethered") {
+    const o = t.targetObstacle;
+
+    if (!o) {
+      t.phase = "retracting";
+      return;
+    }
+
+    const distSO = distance(source.x, source.y, o.x, o.y);
+    if (distSO > TENTACLE_BREAK_RANGE) {
+      t.phase = "retracting";
+      t.targetObstacle = null;
+      return;
+    }
+
+    t.length = Math.min(TENTACLE_MAX_RANGE, distSO);
+
+    t.remaining -= dt;
+    if (t.remaining <= 0) {
+      t.phase = "retracting";
+      t.targetObstacle = null;
     }
   } else if (t.phase === "retracting") {
     t.length -= TENTACLE_EXTEND_SPEED * dt;
@@ -1088,23 +1412,23 @@ function updateTentacleFor(blob, dt) {
 
 // Update tentacles for all blobs
 function updateAllTentacles(dt) {
-  if (player) {
-    updateTentacleFor(player, dt);
-  }
-  for (const bot of bots) {
-    updateTentacleFor(bot, dt);
-  }
+  if (player) updateTentacleFor(player, dt);
+  for (const bot of bots) updateTentacleFor(bot, dt);
 }
 
-// ---- Parasitic tentacle rendering with life-drain ----
+// ---- Tentacle render ----
 function drawAttackTentacle(ctx, t) {
   const source = t.source;
   if (!source) return;
 
   let endX, endY;
+
   if (t.phase === "latched" && t.target) {
     endX = t.target.x;
     endY = t.target.y;
+  } else if (t.phase === "tethered" && t.targetObstacle) {
+    endX = t.targetObstacle.x;
+    endY = t.targetObstacle.y;
   } else {
     endX = source.x + t.dirX * t.length;
     endY = source.y + t.dirY * t.length;
@@ -1116,22 +1440,20 @@ function drawAttackTentacle(ctx, t) {
   const ux = dx / dist;
   const uy = dy / dist;
 
-  // Perpendicular direction for wobble
   const px = -uy;
   const py = ux;
 
   const segments = 18;
   const time = gameTime;
 
-  // Stronger/wilder wiggle when latched
-  const phaseMul = t.phase === "latched" ? 1.6 : 1.0;
-  const ampBase = t.phase === "latched" ? 10 : 7;
+  const phaseMul = (t.phase === "latched" || t.phase === "tethered") ? 1.6 : 1.0;
+  const ampBase = (t.phase === "latched" || t.phase === "tethered") ? 10 : 7;
 
   const bodyColor = source.getColor ? source.getColor() : "#9b5de5";
 
   ctx.save();
 
-  // Outer fleshy tentacle
+  // Outer
   ctx.beginPath();
   for (let i = 0; i <= segments; i++) {
     const s = i / segments;
@@ -1139,8 +1461,7 @@ function drawAttackTentacle(ctx, t) {
     const baseY = source.y + uy * dist * s;
 
     const amp = ampBase * (1 - s * 0.6);
-    const wave =
-      Math.sin(time * 10 * phaseMul + s * 12.0) * amp;
+    const wave = Math.sin(time * 10 * phaseMul + s * 12.0) * amp;
 
     const x = baseX + px * wave;
     const y = baseY + py * wave;
@@ -1153,7 +1474,7 @@ function drawAttackTentacle(ctx, t) {
   ctx.lineCap = "round";
   ctx.stroke();
 
-  // Inner "vein" / core
+  // Inner
   ctx.beginPath();
   for (let i = 0; i <= segments; i++) {
     const s = i / segments;
@@ -1161,8 +1482,7 @@ function drawAttackTentacle(ctx, t) {
     const baseY = source.y + uy * dist * s;
 
     const amp = (ampBase * 0.4) * (1 - s);
-    const wave =
-      Math.sin(time * 14 * phaseMul + s * 18.0 + Math.PI / 3) * amp;
+    const wave = Math.sin(time * 14 * phaseMul + s * 18.0 + Math.PI / 3) * amp;
 
     const x = baseX + px * wave;
     const y = baseY + py * wave;
@@ -1174,44 +1494,38 @@ function drawAttackTentacle(ctx, t) {
   ctx.lineWidth = 2.5;
   ctx.stroke();
 
-  // Tip stinger
+  // Tip
   ctx.beginPath();
   ctx.fillStyle =
-    t.phase === "latched"
+    (t.phase === "latched" || t.phase === "tethered")
       ? "rgba(255,255,255,0.95)"
       : "rgba(255,255,255,0.8)";
   ctx.arc(endX, endY, 5, 0, Math.PI * 2);
   ctx.fill();
 
-  // ========= LIFE-DRAIN ORBS (only when latched) =========
+  // LIFE-DRAIN ORBS only when latched to an enemy
   if (t.phase === "latched" && t.target) {
-    const lifeCount = 8;        // how many "packets" on the line at once
-    const lifeSpeed = 1.8;      // how fast they travel from target -> source
+    const lifeCount = 8;
+    const lifeSpeed = 1.8;
 
     for (let i = 0; i < lifeCount; i++) {
-      // progress 0–1, wrapping over time so they stream continuously
       let progress = (gameTime * lifeSpeed + i / lifeCount) % 1;
 
-      // position from target back toward source
       const lifeX = endX - ux * dist * progress;
       const lifeY = endY - uy * dist * progress;
 
-      // slightly pulsing radius
       const baseR = 4;
-      const r = baseR * (0.8 + 0.4 * Math.sin(gameTime * 10 + i));
-
-      // fade as they approach the source
+      const rr = baseR * (0.8 + 0.4 * Math.sin(gameTime * 10 + i));
       const alpha = 0.3 + 0.7 * (1 - progress);
 
-      // inner + outer glow (pale green / cyan "life force")
       ctx.beginPath();
       ctx.fillStyle = `rgba(180, 255, 210, ${alpha})`;
-      ctx.arc(lifeX, lifeY, r, 0, Math.PI * 2);
+      ctx.arc(lifeX, lifeY, rr, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.beginPath();
       ctx.fillStyle = `rgba(80, 255, 200, ${alpha * 0.8})`;
-      ctx.arc(lifeX, lifeY, r * 0.55, 0, Math.PI * 2);
+      ctx.arc(lifeX, lifeY, rr * 0.55, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -1288,8 +1602,8 @@ function updateDash(dt) {
     source.x += d.dirX * moveDist;
     source.y += d.dirY * moveDist;
     source.clampToWorld();
+    resolveBlobObstacleCollisions(source);
 
-    // Targets are all enemies of the source
     const potentialTargets = getEnemiesFor(source);
 
     for (const target of potentialTargets) {
@@ -1307,14 +1621,11 @@ function updateDash(dt) {
           target.timeRemaining -= DASH_HIT_DRAIN;
           if (target.timeRemaining < 0) target.timeRemaining = 0;
 
-          // track last hitter for kill credit
           target.lastHitBy = source;
-
           source.timeRemaining += DASH_HIT_DRAIN * DASH_EFFICIENCY;
 
           target.stunTimer = DASH_STUN_DURATION;
 
-          // Dash hit FX
           spawnEffect({
             type: "impactPulse",
             x: target.x,
@@ -1339,8 +1650,58 @@ function updateDash(dt) {
       source.timeRemaining -= DASH_MISS_PENALTY;
       if (source.timeRemaining < 0) source.timeRemaining = 0;
     }
-
     activeDash = null;
+  }
+}
+
+// =====================
+// TETHER BOOST BUMPS
+// =====================
+function handleTetherBoostBumps() {
+  const bumpers = [];
+
+  if (player && player.timeRemaining > 0 && player.tentacle && player.tentacle.phase === "tethered") {
+    bumpers.push(player);
+  }
+  for (const b of bots) {
+    if (b.timeRemaining > 0 && b.tentacle && b.tentacle.phase === "tethered") {
+      bumpers.push(b);
+    }
+  }
+
+  for (const attacker of bumpers) {
+    if (attacker.tetherBumpCooldown > 0) continue;
+
+    const enemies = getEnemiesFor(attacker);
+    for (const target of enemies) {
+      if (target.timeRemaining <= 0) continue;
+
+      const d = distance(attacker.x, attacker.y, target.x, target.y);
+      if (d < attacker.radius + target.radius) {
+        const nx = (target.x - attacker.x) / (d || 1);
+        const ny = (target.y - attacker.y) / (d || 1);
+
+        target.x += nx * TETHER_BUMP_KNOCKBACK;
+        target.y += ny * TETHER_BUMP_KNOCKBACK;
+        target.clampToWorld();
+        resolveBlobObstacleCollisions(target);
+
+        target.stunTimer = Math.max(target.stunTimer || 0, TETHER_BUMP_STUN);
+        attacker.tetherBumpCooldown = TETHER_BUMP_COOLDOWN;
+
+        spawnEffect({
+          type: "impactPulse",
+          x: target.x,
+          y: target.y,
+          startRadius: target.radius * 0.6,
+          growth: target.radius * 1.4,
+          age: 0,
+          lifetime: 0.18
+        });
+
+        break;
+      }
+    }
   }
 }
 
@@ -1357,7 +1718,6 @@ function renderLeaderboardHUD() {
   if (!dom.leaderboard) return;
 
   const entries = [];
-
   if (player) entries.push(player);
   for (const b of bots) entries.push(b);
 
@@ -1366,10 +1726,8 @@ function renderLeaderboardHUD() {
     return;
   }
 
-  // Sort by composite score: time + kill weight
   entries.sort((a, b) => computeLeaderboardScore(b) - computeLeaderboardScore(a));
-
-  const topN = entries.slice(0, 4); // show top 4
+  const topN = entries.slice(0, 4);
 
   let html = '<div class="lb-title">Time Leaderboard</div>';
 
@@ -1382,9 +1740,7 @@ function renderLeaderboardHUD() {
     const kills = e.kills || 0;
 
     html += `
-      <div class="lb-row ${isPlayer ? "lb-row-player" : ""} ${
-      i === 0 ? "lb-row-top" : ""
-    }">
+      <div class="lb-row ${isPlayer ? "lb-row-player" : ""} ${i === 0 ? "lb-row-top" : ""}">
         <span class="lb-rank">${rank}.</span>
         <span class="lb-name">${name}</span>
         <span class="lb-time">${time}s</span>
@@ -1404,7 +1760,7 @@ function updateHUD() {
 
   const alive = player.timeRemaining > 0;
 
-  // ===== Tentacle (always available while alive) =====
+  // Tentacle
   if (dom.abilityTentacle && dom.coolTentacle) {
     const cdMax = TENTACLE_COOLDOWN;
     const cd = tentacleCooldown;
@@ -1412,37 +1768,28 @@ function updateHUD() {
     const ratio = cdMax > 0 ? cd / cdMax : 0;
 
     dom.abilityTentacle.classList.toggle("ability-locked", !alive);
-    dom.abilityTentacle.classList.toggle(
-      "ability-ready",
-      alive && !onCooldown
-    );
+    dom.abilityTentacle.classList.toggle("ability-ready", alive && !onCooldown);
 
-    dom.coolTentacle.style.height = onCooldown
-      ? `${Math.min(1, ratio) * 100}%`
-      : "0%";
+    dom.coolTentacle.style.height = onCooldown ? `${Math.min(1, ratio) * 100}%` : "0%";
   }
 
-  // ===== Dash (Adult + Elder only) =====
+  // Dash
   if (dom.abilityDash && dom.coolDash) {
     const hasAge = player.ageState === "Adult" || player.ageState === "Elder";
     const usable = alive && hasAge;
+
     const cdMax = DASH_COOLDOWN;
     const cd = dashCooldown;
     const onCooldown = cd > 0;
     const ratio = cdMax > 0 ? cd / cdMax : 0;
 
     dom.abilityDash.classList.toggle("ability-locked", !usable);
-    dom.abilityDash.classList.toggle(
-      "ability-ready",
-      usable && !onCooldown
-    );
+    dom.abilityDash.classList.toggle("ability-ready", usable && !onCooldown);
 
-    dom.coolDash.style.height = onCooldown
-      ? `${Math.min(1, ratio) * 100}%`
-      : "0%";
+    dom.coolDash.style.height = onCooldown ? `${Math.min(1, ratio) * 100}%` : "0%";
   }
 
-  // ===== Shield (Elder only) =====
+  // Shield
   if (dom.abilityShield && dom.coolShield) {
     const hasAge = player.ageState === "Elder";
     const usable = alive && hasAge;
@@ -1453,17 +1800,11 @@ function updateHUD() {
     const ratio = cdMax > 0 ? cd / cdMax : 0;
 
     dom.abilityShield.classList.toggle("ability-locked", !usable);
-    dom.abilityShield.classList.toggle(
-      "ability-ready",
-      usable && !onCooldown
-    );
+    dom.abilityShield.classList.toggle("ability-ready", usable && !onCooldown);
 
-    dom.coolShield.style.height = onCooldown
-      ? `${Math.min(1, ratio) * 100}%`
-      : "0%";
+    dom.coolShield.style.height = onCooldown ? `${Math.min(1, ratio) * 100}%` : "0%";
   }
 
-  // Leaderboard (time + kills)
   renderLeaderboardHUD();
 }
 
@@ -1482,6 +1823,9 @@ function resizeCanvas() {
 
   wrapper.style.width = `${CANVAS_WIDTH}px`;
   wrapper.style.height = `${CANVAS_HEIGHT}px`;
+
+  // refresh background buffers to new size
+  initBackground();
 }
 
 // =====================
@@ -1532,11 +1876,11 @@ function renderPreview() {
       ageState: stage.ageState,
       baseColor: color,
       wobblePhase: 0,
-      timeRemaining: 100
+      timeRemaining: 100,
+      shieldTimer: 0
     };
     drawParasiteBody(previewCtx, tempBlob);
 
-    // Stage label under each
     previewCtx.save();
     previewCtx.fillStyle = "#ffffff";
     previewCtx.font = "10px system-ui";
@@ -1547,53 +1891,132 @@ function renderPreview() {
 }
 
 // =====================
+// OBSTACLE RENDER (time-themed)
+// =====================
+function drawObstacles(ctx) {
+  for (const o of obstacles) {
+    const t = gameTime;
+
+    ctx.save();
+
+    // Base disk
+    ctx.fillStyle = "rgba(6, 8, 12, 0.95)";
+    ctx.beginPath();
+    ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Outer chrono ring
+    ctx.globalCompositeOperation = "screen";
+    ctx.strokeStyle = "rgba(80,255,220,0.20)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(o.x, o.y, o.r + 2, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Inner ring
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(o.x, o.y, o.r * 0.72, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Clock ticks
+    const ticks = 12;
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.lineWidth = 2;
+    for (let i = 0; i < ticks; i++) {
+      const a = (i / ticks) * Math.PI * 2 + Math.sin(t * 0.25) * 0.05;
+      const x0 = o.x + Math.cos(a) * (o.r * 0.78);
+      const y0 = o.y + Math.sin(a) * (o.r * 0.78);
+      const x1 = o.x + Math.cos(a) * (o.r * 0.96);
+      const y1 = o.y + Math.sin(a) * (o.r * 0.96);
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+
+    // Rotating hand accent
+    const handA = t * 0.8;
+    ctx.strokeStyle = "rgba(80,255,220,0.22)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(o.x, o.y);
+    ctx.lineTo(
+      o.x + Math.cos(handA) * (o.r * 0.9),
+      o.y + Math.sin(handA) * (o.r * 0.9)
+    );
+    ctx.stroke();
+
+    // Hourglass silhouette
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    ctx.fillStyle = "rgba(120,160,255,0.08)";
+    ctx.beginPath();
+    const hgW = o.r * 0.55;
+    const hgH = o.r * 0.85;
+    ctx.moveTo(o.x - hgW * 0.6, o.y - hgH);
+    ctx.quadraticCurveTo(o.x, o.y - hgH * 0.35, o.x - hgW * 0.18, o.y);
+    ctx.quadraticCurveTo(o.x, o.y + hgH * 0.35, o.x - hgW * 0.6, o.y + hgH);
+    ctx.lineTo(o.x + hgW * 0.6, o.y + hgH);
+    ctx.quadraticCurveTo(o.x, o.y + hgH * 0.35, o.x + hgW * 0.18, o.y);
+    ctx.quadraticCurveTo(o.x, o.y - hgH * 0.35, o.x + hgW * 0.6, o.y - hgH);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Center glow
+    ctx.globalCompositeOperation = "screen";
+    const g = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, o.r * 0.65);
+    g.addColorStop(0, "rgba(80,255,220,0.10)");
+    g.addColorStop(0.55, "rgba(120,160,255,0.05)");
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(o.x, o.y, o.r * 0.65, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+// =====================
 // SINGLE-PLAYER UPDATE & RENDER
 // =====================
 function updateSingle(dt) {
   if (!player) return;
 
   if (!gameOver) {
-    // --- Update player + orbs ---
     player.update(dt);
     handleOrbPickupFor(player);
 
-    // --- Update bots + orbs (but NOT death yet) ---
     for (let i = 0; i < bots.length; i++) {
       const bot = bots[i];
       bot.update(dt, orbs);
       handleOrbPickupFor(bot);
     }
 
-    // --- Abilities can finish people off here ---
     updateAllTentacles(dt);
     updateDash(dt);
+    handleTetherBoostBumps();
 
-    // --- NOW handle bot deaths & respawns ---
+    // bot deaths
     for (let i = 0; i < bots.length; i++) {
       const bot = bots[i];
-
       if (bot.timeRemaining <= 0) {
-        // credit kill to last hitter, if any
         if (bot.lastHitBy && bot.lastHitBy !== bot) {
           bot.lastHitBy.kills = (bot.lastHitBy.kills || 0) + 1;
         }
-        // respawn a fresh bot
         bots[i] = new Bot();
       }
     }
 
-    // --- Effects, camera, cooldowns ---
     updateEffects(dt);
     updateCamera();
 
-    if (tentacleCooldown > 0) {
-      tentacleCooldown = Math.max(0, tentacleCooldown - dt);
-    }
-    if (dashCooldown > 0) {
-      dashCooldown = Math.max(0, dashCooldown - dt);
-    }
+    if (tentacleCooldown > 0) tentacleCooldown = Math.max(0, tentacleCooldown - dt);
+    if (dashCooldown > 0) dashCooldown = Math.max(0, dashCooldown - dt);
 
-    // --- Player death -> credit kill & end game ---
     if (player.timeRemaining <= 0 && !gameOver) {
       if (player.lastHitBy && player.lastHitBy !== player) {
         player.lastHitBy.kills = (player.lastHitBy.kills || 0) + 1;
@@ -1605,40 +2028,37 @@ function updateSingle(dt) {
 }
 
 function renderSingle() {
+  // World-space draw
   ctx.save();
   ctx.translate(
     CANVAS_WIDTH / 2 - camera.x,
     CANVAS_HEIGHT / 2 - camera.y
   );
 
+  // World border
   ctx.save();
   ctx.strokeStyle = "#2c3e50";
   ctx.lineWidth = 4;
   ctx.strokeRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
   ctx.restore();
 
-  for (const orb of orbs) {
-    orb.draw(ctx);
-  }
+  // Obstacles
+  drawObstacles(ctx);
 
-  for (const bot of bots) {
-    bot.draw(ctx);
-  }
+  // Orbs
+  for (const orb of orbs) orb.draw(ctx);
 
-  if (player) {
-    player.draw(ctx);
-  }
+  // Bots
+  for (const bot of bots) bot.draw(ctx);
 
-  // Draw all tentacles (player + bots)
-  if (player && player.tentacle) {
-    drawAttackTentacle(ctx, player.tentacle);
-  }
-  for (const bot of bots) {
-    if (bot.tentacle) {
-      drawAttackTentacle(ctx, bot.tentacle);
-    }
-  }
+  // Player
+  if (player) player.draw(ctx);
 
+  // Tentacles
+  if (player && player.tentacle) drawAttackTentacle(ctx, player.tentacle);
+  for (const bot of bots) if (bot.tentacle) drawAttackTentacle(ctx, bot.tentacle);
+
+  // Dash ring
   if (activeDash && activeDash.phase === "dashing" && activeDash.source) {
     const s = activeDash.source;
     ctx.save();
@@ -1650,15 +2070,12 @@ function renderSingle() {
     ctx.restore();
   }
 
-  // World-space FX (impact pulse, orb pop, etc.)
+  // World-space FX
   drawEffects(ctx);
 
   ctx.restore();
 
-  if (gameOver) {
-    drawGameOver();
-  }
-
+  if (gameOver) drawGameOver();
   updateHUD();
 }
 
@@ -1671,18 +2088,18 @@ function gameLoop(timestamp) {
 
   gameTime = timestamp / 1000;
 
+  // Background always animates (menu + game)
+  updateBackground(dt);
+
+  // 1) Draw animated background in screen-space
   ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  drawBackgroundScreenSpace(ctx);
 
-  ctx.save();
-  ctx.fillStyle = "#050a12";
-  ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-  ctx.restore();
-
+  // 2) Gameplay / Menu overlay
   if (currentScreen === "single") {
     updateSingle(dt);
     renderSingle();
   } else if (currentScreen === "menu") {
-    // Continuously animate preview
     renderPreview();
   }
 
@@ -1717,9 +2134,6 @@ function init() {
 
   cacheDom();
 
-  // initialize swatch + preview from default slider values
-  renderPreview();
-
   canvas.addEventListener("mousemove", e => {
     const rect = canvas.getBoundingClientRect();
     mouseScreenX = e.clientX - rect.left;
@@ -1734,9 +2148,7 @@ function init() {
     }
   });
 
-  canvas.addEventListener("contextmenu", e => {
-    e.preventDefault();
-  });
+  canvas.addEventListener("contextmenu", e => e.preventDefault());
 
   dom.btnSingle.addEventListener("click", startSinglePlayer);
   dom.btnMulti.addEventListener("click", showMultiplayerComingSoon);
@@ -1758,10 +2170,15 @@ function init() {
     });
   }
 
-  showMenu();
-
   window.addEventListener("resize", resizeCanvas);
+
   resizeCanvas();
+  initBackground();
+
+  // initialize swatch + preview from default slider values
+  renderPreview();
+
+  showMenu();
 
   lastTimestamp = performance.now();
   requestAnimationFrame(gameLoop);
