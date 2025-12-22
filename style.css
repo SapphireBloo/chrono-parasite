@@ -579,3 +579,101 @@ body {
   color: #ffffff;
   font-size: 14px;
 }
+
+/* ============================================================
+   ✅ MUSIC HUD (ADD-ON)
+   Put this in BOTH menu and in-game top-right
+   Requires HTML elements with ids:
+   #menu-music-hud, #hud-music-hud
+   and structure classes used below.
+   ============================================================ */
+
+.music-hud {
+  position: fixed;         /* ✅ pins to top-right of the SCREEN */
+  top: 14px;
+  right: 14px;
+  z-index: 9999;
+
+  width: 240px;
+  padding: 10px 12px;
+
+  background: rgba(5, 7, 10, 0.88);
+  border: 1px solid rgba(120, 255, 230, 0.22);
+  border-radius: 10px;
+
+  box-shadow: 0 10px 26px rgba(0,0,0,0.65);
+  pointer-events: auto;    /* clickable even though #ui-container is none */
+}
+
+.music-hud .music-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #9aa4b7;
+  margin-bottom: 6px;
+}
+
+.music-hud .music-now {
+  font-size: 12px;
+  color: #dde2f0;
+  margin-bottom: 8px;
+  line-height: 1.2;
+}
+
+.music-hud .music-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.music-hud button {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(16, 24, 38, 0.85);
+  color: #ffffff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+
+.music-hud button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(0,0,0,0.45);
+}
+
+.music-hud button:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.music-hud .music-volume-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+.music-hud .music-volume-row label {
+  font-size: 11px;
+  color: #c0c7d9;
+}
+
+.music-hud input[type="range"] {
+  width: 100%;
+}
+
+.music-hud .music-vol-val {
+  font-size: 11px;
+  color: #9aa4b7;
+  text-align: right;
+}
+
+/* Optional: subtle “playing” glow class you can toggle from JS */
+.music-hud.music-playing {
+  border-color: rgba(50, 224, 255, 0.35);
+  box-shadow:
+    0 10px 26px rgba(0,0,0,0.65),
+    0 0 18px rgba(50, 224, 255, 0.12);
+}

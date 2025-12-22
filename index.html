@@ -13,6 +13,34 @@
     <div id="ui-container">
       <!-- MAIN MENU -->
       <div id="main-menu" class="panel">
+
+        <!-- ✅ MENU MUSIC HUD (TOP-RIGHT) -->
+        <div id="music-hud-menu" class="music-hud">
+          <div class="music-title-row">
+            <div class="music-label">Music</div>
+            <div id="music-nowplaying-menu" class="music-now">—</div>
+          </div>
+
+          <div class="music-controls-row">
+            <button id="music-mute-menu" class="music-btn" type="button">Mute</button>
+            <button id="music-next-menu" class="music-btn" type="button">Next</button>
+          </div>
+
+          <div class="music-volume-row">
+            <label class="music-vol-label" for="music-volume-menu">Vol</label>
+            <input
+              id="music-volume-menu"
+              class="music-volume"
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value="0.55"
+            />
+          </div>
+        </div>
+        <!-- ✅ END MENU MUSIC HUD -->
+
         <div id="menu-inner">
           <!-- LEFT: Color + Name -->
           <div id="menu-left">
@@ -77,6 +105,34 @@
 
       <!-- HUD DURING GAME -->
       <div id="hud" class="panel hidden">
+        <!-- ✅ IN-GAME MUSIC HUD (TOP-RIGHT) -->
+<div id="music-hud-hud" class="music-hud">
+  <div class="music-title-row">
+    <div class="music-label">Music</div>
+    <div id="music-nowplaying-hud" class="music-now">—</div>
+  </div>
+
+  <div class="music-controls-row">
+    <button id="music-mute-hud" class="music-btn" type="button">Mute</button>
+    <button id="music-next-hud" class="music-btn" type="button">Next</button>
+  </div>
+
+  <div class="music-volume-row">
+    <label class="music-vol-label" for="music-volume-hud">Vol</label>
+    <input
+      id="music-volume-hud"
+      class="music-volume"
+      type="range"
+      min="0"
+      max="1"
+      step="0.01"
+      value="0.55"
+    />
+  </div>
+</div>
+<!-- ✅ END IN-GAME MUSIC HUD -->
+
+
         <!-- Top HUD -->
         <div id="hud-left">
           <span id="hud-time">Time: 60</span>
@@ -165,6 +221,19 @@
           <button id="btn-how-back">Back to Menu</button>
         </div>
       </div>
+
+      <!-- ✅ AUDIO TAGS (your two tracks) -->
+      <!-- Put your .mp3/.ogg files in the same folder, or update the src paths -->
+      <audio id="bg-music" preload="auto" crossorigin="anonymous">
+  <source src="assets/audio/quake-aavirall-main-version-33794-02-15.mp3" type="audio/mpeg" />
+</audio>
+
+<audio id="bg-music" preload="auto" crossorigin="anonymous">
+  <source src="assets/audio/shadow-runner-mountaineer-main-version-21965-02-22.mp3" type="audio/mpeg" />
+</audio>
+
+      <!-- ✅ END AUDIO TAGS -->
+
     </div>
   </div>
 
