@@ -195,8 +195,14 @@ const MUSIC_TRACKS = [
     title: "Shadow Runner (Mountaineer)",
     artist: "Main Version",
     src: "assets/audio/shadow-runner-mountaineer-main-version-21965-02-22.mp3"
+  },
+  {
+    title: "Heavy German Techno",
+    artist: "Dark Industrial",
+    src: "assets/audio/heavy-german-techno-beat-dark-industrial-instrumental-403003.mp3"
   }
 ];
+
 
 const musicState = {
   audioEl: null,
