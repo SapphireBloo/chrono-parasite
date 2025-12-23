@@ -69,6 +69,38 @@ const OBSTACLE_COUNT = 12;
 const OBSTACLE_RADIUS_MIN = 28;
 const OBSTACLE_RADIUS_MAX = 60;
 
+
+// =====================
+// SPAWN SPACING HELPERS
+// =====================
+function circlesOverlap(x1, y1, r1, x2, y2, r2, pad = 0) {
+  const dx = x1 - x2;
+  const dy = y1 - y2;
+  const rr = r1 + r2 + pad;
+  return (dx * dx + dy * dy) < (rr * rr);
+}
+
+function isCircleClear(x, y, r, existing, pad = 0) {
+  for (const c of existing) {
+    if (circlesOverlap(x, y, r, c.x, c.y, c.r, pad)) return false;
+  }
+  return true;
+}
+// ===== WORMHOLES (Neutral Teleport) =====
+const WORMHOLE_COUNT = 6;
+
+// Visual / collision size (bigger, more readable)
+const WORMHOLE_RADIUS = 34;
+
+// Teleport safety cooldown (prevents chain-teleports)
+const WORMHOLE_TELEPORT_COOLDOWN = 1.0; // per-blob
+
+// --- Wormhole screen FX + camera pull (player-only feedback) ---
+const WORMHOLE_PULL_RADIUS = 260;     // how far the camera tug starts
+const WORMHOLE_PULL_STRENGTH = 34;    // max camera offset (pixels)
+const WORMHOLE_WARP_RADIUS = 420;     // warp overlay visibility radius
+const WORMHOLE_WARP_DURATION = 0.28;  // seconds of extra warp after teleport
+
 // ===== Tentacle -> Barrier Tether =====
 const TETHER_SPEED_MULT = 1.45;     // speed boost while tethered
 const TETHER_BUMP_KNOCKBACK = 420;  // how hard you knock others away
@@ -426,6 +458,16 @@ let orbs = [];
 // Obstacles / barriers
 let obstacles = [];
 
+// Wormholes
+let wormholes = [];
+
+// Wormhole camera/warp feedback (player-only)
+let wormholeWarp = {
+  timer: 0,
+  x: 0,
+  y: 0
+};
+
 // Chronovore
 let timeWorm = null;
 
@@ -635,17 +677,38 @@ function findClosestEnemy(self, maxDistance = Infinity) {
 // =====================
 // OBSTACLES: SPAWN + COLLISION + LOS
 // =====================
+
 function spawnObstacles(count) {
   obstacles = [];
 
-  for (let i = 0; i < count; i++) {
-    const r = randRange(OBSTACLE_RADIUS_MIN, OBSTACLE_RADIUS_MAX);
-    const x = randRange(r + 40, WORLD_WIDTH - r - 40);
-    const y = randRange(r + 40, WORLD_HEIGHT - r - 40);
+  const PAD = 18;      // extra spacing between obstacles
+  const MAX_TRIES = 220;
 
-    obstacles.push({ x, y, r });
+  for (let i = 0; i < count; i++) {
+    let placed = false;
+
+    for (let t = 0; t < MAX_TRIES; t++) {
+      const r = randRange(OBSTACLE_RADIUS_MIN, OBSTACLE_RADIUS_MAX);
+      const x = randRange(r + 40, WORLD_WIDTH - r - 40);
+      const y = randRange(r + 40, WORLD_HEIGHT - r - 40);
+
+      if (isCircleClear(x, y, r, obstacles, PAD)) {
+        obstacles.push({ x, y, r });
+        placed = true;
+        break;
+      }
+    }
+
+    // fallback: if crowded, place anyway (rare)
+    if (!placed) {
+      const r = randRange(OBSTACLE_RADIUS_MIN, OBSTACLE_RADIUS_MAX);
+      const x = randRange(r + 40, WORLD_WIDTH - r - 40);
+      const y = randRange(r + 40, WORLD_HEIGHT - r - 40);
+      obstacles.push({ x, y, r });
+    }
   }
 }
+
 
 function resolveBlobObstacleCollisions(blob) {
   for (const o of obstacles) {
@@ -952,6 +1015,9 @@ class BlobBase {
     this.slowTimer = 0;
     this.slowFactor = 1;
 
+    // Teleport safety cooldown (wormholes)
+    this.teleportCooldown = 0;
+
     // Shield
     this.shieldTimer = 0;
     this.shieldCooldown = 0;
@@ -1007,6 +1073,13 @@ class BlobBase {
         this.slowFactor = 1;
       }
     }
+
+    // wormhole teleport cooldown
+    if (this.teleportCooldown > 0) {
+      this.teleportCooldown -= dt;
+      if (this.teleportCooldown < 0) this.teleportCooldown = 0;
+    }
+
     if (this.shieldTimer > 0) {
       this.shieldTimer -= dt;
       if (this.shieldTimer < 0) this.shieldTimer = 0;
@@ -1338,6 +1411,354 @@ class Bot extends BlobBase {
 }
 
 // =====================
+// WORMHOLES (NEUTRAL TELEPORT) SYSTEM
+// =====================
+
+function spawnWormholes(count) {
+  wormholes = [];
+
+  const styles = [
+    { core: "#050508", glow: [80, 220, 255] },   // teal
+    { core: "#060509", glow: [180, 120, 255] },  // violet
+    { core: "#070505", glow: [255, 180, 90] }    // amber
+  ];
+
+  const PAD = 28;      // extra spacing from obstacles/other wormholes
+  const MAX_TRIES = 260;
+
+  for (let i = 0; i < count; i++) {
+    let placed = false;
+
+    for (let t = 0; t < MAX_TRIES; t++) {
+      const r = WORMHOLE_RADIUS;
+      const x = randRange(r + 100, WORLD_WIDTH - r - 100);
+      const y = randRange(r + 100, WORLD_HEIGHT - r - 100);
+
+      // don't stack on obstacles or other wormholes
+      if (!isCircleClear(x, y, r, obstacles, PAD)) continue;
+      if (!isCircleClear(x, y, r, wormholes, PAD)) continue;
+
+      const style = styles[Math.floor(Math.random() * styles.length)];
+
+      wormholes.push({
+        x, y, r,
+        phase: randRange(0, Math.PI * 2),
+        spin: randRange(0.6, 1.4),
+        color: style
+      });
+
+      placed = true;
+      break;
+    }
+
+    // fallback: place anyway (rare)
+    if (!placed) {
+      const r = WORMHOLE_RADIUS;
+      const x = randRange(r + 100, WORLD_WIDTH - r - 100);
+      const y = randRange(r + 100, WORLD_HEIGHT - r - 100);
+      const style = styles[Math.floor(Math.random() * styles.length)];
+      wormholes.push({
+        x, y, r,
+        phase: randRange(0, Math.PI * 2),
+        spin: randRange(0.6, 1.4),
+        color: style
+      });
+    }
+  }
+}
+
+
+function pointInsideObstacle(x, y, pad = 0) {
+  for (const o of obstacles) {
+    if (distance(x, y, o.x, o.y) <= o.r + pad) return true;
+  }
+  return false;
+}
+
+function findSafeTeleportPoint(blob) {
+  const pad = (blob?.radius || 18) + 18;
+
+  for (let tries = 0; tries < 40; tries++) {
+    const x = randRange(pad, WORLD_WIDTH - pad);
+    const y = randRange(pad, WORLD_HEIGHT - pad);
+
+    if (pointInsideObstacle(x, y, pad)) continue;
+
+    // avoid dropping basically on top of wormholes
+    let tooClose = false;
+    for (const w of wormholes) {
+      if (distance(x, y, w.x, w.y) < 120) { tooClose = true; break; }
+    }
+    if (tooClose) continue;
+
+    // avoid spawning directly in immediate devour proximity
+    if (WORM_ENABLED && timeWorm) {
+      const info = getClosestWormPoint(x, y);
+      if (info.dist < 160) continue;
+    }
+
+    return { x, y };
+  }
+
+  return { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2 };
+}
+
+function handleWormholeTeleport(blob) {
+  if (!blob || blob.timeRemaining <= 0) return;
+  if (blob.teleportCooldown > 0) return;
+
+  for (const w of wormholes) {
+    const d = distance(blob.x, blob.y, w.x, w.y);
+    if (d <= blob.radius + w.r) {
+      // Player-only feedback: screen warp pulse when entering a wormhole
+      if (blob === player && wormholeWarp) {
+        wormholeWarp.timer = WORMHOLE_WARP_DURATION;
+        wormholeWarp.x = w.x;
+        wormholeWarp.y = w.y;
+      }
+
+      const dest = findSafeTeleportPoint(blob);
+
+      spawnEffect({
+        type: "impactPulse",
+        x: blob.x,
+        y: blob.y,
+        startRadius: blob.radius * 0.5,
+        growth: blob.radius * 2.6,
+        age: 0,
+        lifetime: 0.22
+      });
+
+      blob.x = dest.x;
+      blob.y = dest.y;
+      blob.clampToWorld();
+      resolveBlobObstacleCollisions(blob);
+
+      spawnEffect({
+        type: "impactPulse",
+        x: blob.x,
+        y: blob.y,
+        startRadius: blob.radius * 0.5,
+        growth: blob.radius * 2.6,
+        age: 0,
+        lifetime: 0.22
+      });
+
+      blob.teleportCooldown = WORMHOLE_TELEPORT_COOLDOWN;
+      return;
+    }
+  }
+}
+
+function drawWormholes(ctx) {
+  const t = gameTime;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+
+  for (const w of wormholes) {
+    const pulse = 0.6 + 0.4 * Math.sin(t * 2.4 + (w.phase || 0));
+    const outer = w.r * (3.2 + 0.4 * pulse);
+    const inner = w.r * (1.1 + 0.1 * pulse);
+
+    const c = w.color || { core: "#050508", glow: [80, 220, 255] };
+    const gr = c.glow[0], gg = c.glow[1], gb = c.glow[2];
+
+    // Outer accretion glow
+    const glowGrad = ctx.createRadialGradient(w.x, w.y, inner, w.x, w.y, outer);
+    glowGrad.addColorStop(0.0, `rgba(${gr},${gg},${gb},0.0)`);
+    glowGrad.addColorStop(0.35, `rgba(${gr},${gg},${gb},${0.12 + 0.08 * pulse})`);
+    glowGrad.addColorStop(0.7, `rgba(${gr},${gg},${gb},${0.18 + 0.12 * pulse})`);
+    glowGrad.addColorStop(1.0, "rgba(0,0,0,0)");
+
+    ctx.fillStyle = glowGrad;
+    ctx.beginPath();
+    ctx.arc(w.x, w.y, outer, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Swirling energy arcs
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = `rgba(${gr},${gg},${gb},${0.35 + 0.25 * pulse})`;
+
+    for (let i = 0; i < 3; i++) {
+      const spin = (w.spin || 1) * (0.6 + i * 0.25);
+      const rot = t * spin;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, w.r * (1.8 + i * 0.35), rot, rot + Math.PI * 1.4);
+      ctx.stroke();
+    }
+
+    // Gravitational lens ring
+    ctx.strokeStyle = `rgba(255,255,255,${0.18 + 0.12 * pulse})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(w.x, w.y, w.r * 1.05, t * 0.8, t * 0.8 + Math.PI * 1.6);
+    ctx.stroke();
+
+    // Event horizon (black core)
+    const coreGrad = ctx.createRadialGradient(w.x, w.y, 0, w.x, w.y, w.r);
+    coreGrad.addColorStop(0, "#000000");
+    coreGrad.addColorStop(0.7, c.core || "#050508");
+    coreGrad.addColorStop(1.0, "rgba(0,0,0,0.9)");
+
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = coreGrad;
+    ctx.beginPath();
+    ctx.arc(w.x, w.y, w.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalCompositeOperation = "screen";
+  }
+
+  ctx.restore();
+}
+
+function drawWormholeDistortionOverlay(ctx) {
+  if (!player || player.timeRemaining <= 0) return;
+  if (!wormholes || wormholes.length === 0) return;
+
+  // Find closest wormhole
+  let best = null;
+  let bestD = Infinity;
+  for (const w of wormholes) {
+    const d = distance(player.x, player.y, w.x, w.y);
+    if (d < bestD) {
+      bestD = d;
+      best = w;
+    }
+  }
+
+  const hasWarpKick = wormholeWarp && wormholeWarp.timer > 0;
+  const inRange = best && bestD < WORMHOLE_WARP_RADIUS;
+
+  if (!hasWarpKick && !inRange) return;
+
+  const wx = hasWarpKick ? wormholeWarp.x : best.x;
+  const wy = hasWarpKick ? wormholeWarp.y : best.y;
+
+  // World -> Screen
+  const sx = (wx - camera.x) + CANVAS_WIDTH / 2;
+  const sy = (wy - camera.y) + CANVAS_HEIGHT / 2;
+
+  const nearT = inRange ? clamp(1 - bestD / WORMHOLE_WARP_RADIUS, 0, 1) : 0;
+  const kickT = hasWarpKick ? clamp(wormholeWarp.timer / WORMHOLE_WARP_DURATION, 0, 1) : 0;
+
+  const strength = clamp(nearT * 0.65 + kickT * 0.95, 0, 1);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+
+  // Subtle wash
+  ctx.fillStyle = `rgba(120, 160, 255, ${0.05 * strength})`;
+  ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+  // Lensing rings
+  const baseR = 70 + 120 * strength;
+  const rings = 6;
+
+  for (let i = 0; i < rings; i++) {
+    const p = i / (rings - 1);
+    const rr = baseR + p * (220 + 140 * strength);
+    const wob = Math.sin(gameTime * (2.6 + p * 1.5) + p * 9.0) * (6 + 14 * strength);
+
+    ctx.strokeStyle = `rgba(255,255,255,${(0.04 + 0.05 * strength) * (1 - p)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(sx, sy, rr + wob, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = `rgba(120, 255, 230, ${(0.035 + 0.06 * strength) * (1 - p)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(sx + 2 * strength, sy - 1 * strength, rr * 0.92 + wob * 0.75, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = `rgba(180, 120, 255, ${(0.03 + 0.05 * strength) * (1 - p)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(sx - 2 * strength, sy + 1 * strength, rr * 1.02 + wob * 0.5, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Swirl arcs
+  ctx.lineWidth = 3;
+  for (let k = 0; k < 3; k++) {
+    const rot = gameTime * (1.2 + 0.35 * k) * (0.8 + strength);
+    const rr = (120 + k * 45) * (1 + 0.35 * strength);
+
+    ctx.strokeStyle = `rgba(255,255,255,${0.06 * strength})`;
+    ctx.beginPath();
+    ctx.arc(sx, sy, rr, rot, rot + Math.PI * 1.1);
+    ctx.stroke();
+
+    ctx.strokeStyle = `rgba(120,255,230,${0.06 * strength})`;
+    ctx.beginPath();
+    ctx.arc(sx, sy, rr * 0.82, -rot, -rot + Math.PI * 0.95);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+
+
+// =====================
+// TENTACLE AIM INDICATOR (Player)
+// =====================
+function drawTentacleAimIndicator(ctx, blob) {
+  if (!blob || blob.timeRemaining <= 0) return;
+  if (currentScreen !== "single") return;
+  if (blob !== player) return; // player-only
+  if (gameOver) return;
+  if (blob.stunTimer > 0) return;
+  if (activeDash && activeDash.source === blob && activeDash.phase === "dashing") return;
+
+  // world mouse position
+  const mx = mouseScreenX - CANVAS_WIDTH / 2 + camera.x;
+  const my = mouseScreenY - CANVAS_HEIGHT / 2 + camera.y;
+
+  let dx = mx - blob.x;
+  let dy = my - blob.y;
+  const mag = Math.hypot(dx, dy);
+  if (mag < 0.001) return;
+  dx /= mag; dy /= mag;
+
+  const startX = blob.x + dx * blob.radius;
+  const startY = blob.y + dy * blob.radius;
+
+  const previewLen = Math.min(TENTACLE_MAX_RANGE, 220 + blob.radius * 2);
+  const endX = blob.x + dx * previewLen;
+  const endY = blob.y + dy * previewLen;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+
+  // dashed aim ray
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 7]);
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.lineTo(endX, endY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // launch point dot
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.beginPath();
+  ctx.arc(startX, startY, 3.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  // soft endpoint bloom to show direction
+  ctx.fillStyle = "rgba(120, 255, 230, 0.18)";
+  ctx.beginPath();
+  ctx.arc(endX, endY, 8, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// =====================
 // CHRONOVORE (TIME WORM) SYSTEM
 // =====================
 function spawnTimeWorm() {
@@ -1494,9 +1915,48 @@ function updateTimeWorm(dt) {
     }
   }
 
-  // steering (keep the rest of your function from here down)
+  
+// steering + avoidance (respect obstacles + wormholes)
   const head = timeWorm.segments[0];
-  const desired = Math.atan2(ty - head.y, tx - head.x);
+
+  // base seek vector toward target
+  let vx = tx - head.x;
+  let vy = ty - head.y;
+
+  const vmag = Math.hypot(vx, vy) || 1;
+  vx /= vmag;
+  vy /= vmag;
+
+  // avoidance vector from nearby circles
+  let ax = 0;
+  let ay = 0;
+
+  const addAvoid = (cx, cy, cr) => {
+    const dx = head.x - cx;
+    const dy = head.y - cy;
+    const d = Math.hypot(dx, dy) || 0.0001;
+
+    // influence radius: circle radius + buffer
+    const influence = cr + WORM_RADIUS * 2.2 + 60;
+    if (d >= influence) return;
+
+    const t = (influence - d) / influence; // 0..1
+    const push = (t * t) * 1.35;           // stronger near surface
+
+    ax += (dx / d) * push;
+    ay += (dy / d) * push;
+  };
+
+  for (const o of obstacles) addAvoid(o.x, o.y, o.r);
+  if (typeof wormholes !== "undefined") {
+    for (const w of wormholes) addAvoid(w.x, w.y, w.r);
+  }
+
+  // combine seek + avoid
+  const steerX = vx + ax * 1.25;
+  const steerY = vy + ay * 1.25;
+
+  const desired = Math.atan2(steerY, steerX);
 
   let da = desired - timeWorm.ang;
   while (da > Math.PI) da -= Math.PI * 2;
@@ -1506,7 +1966,7 @@ function updateTimeWorm(dt) {
   da = clamp(da, -maxTurn, maxTurn);
   timeWorm.ang += da;
 
-  // move head
+// move head
   head.x += Math.cos(timeWorm.ang) * WORM_SPEED * dt;
   head.y += Math.sin(timeWorm.ang) * WORM_SPEED * dt;
 
@@ -1531,7 +1991,33 @@ function updateTimeWorm(dt) {
     }
   }
 
-  timeWorm.pulse += dt * 5.2;
+  
+  // collide worm body against obstacles + wormholes (prevents phasing)
+  const resolveCircle = (seg, cx, cy, cr) => {
+    const dx = seg.x - cx;
+    const dy = seg.y - cy;
+    const d = Math.hypot(dx, dy) || 0.0001;
+    const minD = cr + WORM_RADIUS * 0.95;
+
+    if (d < minD) {
+      const nx = dx / d;
+      const ny = dy / d;
+      const push = (minD - d) + 0.5;
+      seg.x += nx * push;
+      seg.y += ny * push;
+    }
+  };
+
+  for (const seg of timeWorm.segments) {
+    for (const o of obstacles) resolveCircle(seg, o.x, o.y, o.r);
+    if (typeof wormholes !== "undefined") {
+      for (const w of wormholes) resolveCircle(seg, w.x, w.y, w.r);
+    }
+    seg.x = clamp(seg.x, 80, WORLD_WIDTH - 80);
+    seg.y = clamp(seg.y, 80, WORLD_HEIGHT - 80);
+  }
+
+timeWorm.pulse += dt * 5.2;
 }
 
 function getClosestWormPoint(px, py) {
@@ -1807,6 +2293,7 @@ function startSinglePlayer() {
 
   spawnOrbs(ORB_COUNT);
   spawnObstacles(OBSTACLE_COUNT);
+  spawnWormholes(WORMHOLE_COUNT);
   spawnBots(BOT_COUNT);
   spawnTimeWorm();
 
@@ -2497,6 +2984,33 @@ function updateCamera() {
   camera.x = player.x;
   camera.y = player.y;
 
+
+  // --- Wormhole gravity pull (subtle camera-only tug) ---
+  if (wormholes && wormholes.length > 0 && player && player.timeRemaining > 0) {
+    let best = null;
+    let bestD = Infinity;
+
+    for (const w of wormholes) {
+      const d = distance(player.x, player.y, w.x, w.y);
+      if (d < bestD) {
+        bestD = d;
+        best = w;
+      }
+    }
+
+    if (best && bestD < WORMHOLE_PULL_RADIUS) {
+      const t = clamp(1 - bestD / WORMHOLE_PULL_RADIUS, 0, 1);
+      const dx = best.x - player.x;
+      const dy = best.y - player.y;
+      const mag = Math.hypot(dx, dy) || 1;
+
+      const pull = WORMHOLE_PULL_STRENGTH * (t * t);
+      camera.x += (dx / mag) * pull;
+      camera.y += (dy / mag) * pull;
+    }
+  }
+
+
   // subtle shake when Chronovore is VERY close
   if (WORM_ENABLED && timeWorm && player && player.timeRemaining > 0) {
     const info = getClosestWormPoint(player.x, player.y);
@@ -2652,11 +3166,13 @@ function updateSingle(dt) {
   if (!gameOver) {
     player.update(dt);
     handleOrbPickupFor(player);
+    handleWormholeTeleport(player);
 
     for (let i = 0; i < bots.length; i++) {
       const bot = bots[i];
       bot.update(dt, orbs);
       handleOrbPickupFor(bot);
+      handleWormholeTeleport(bot);
     }
 
     updateAllTentacles(dt);
@@ -2684,6 +3200,8 @@ function updateSingle(dt) {
 
     if (tentacleCooldown > 0) tentacleCooldown = Math.max(0, tentacleCooldown - dt);
     if (dashCooldown > 0) dashCooldown = Math.max(0, dashCooldown - dt);
+
+    if (wormholeWarp && wormholeWarp.timer > 0) wormholeWarp.timer = Math.max(0, wormholeWarp.timer - dt);
 
     if (player.timeRemaining <= 0 && !gameOver) {
       if (player.lastHitBy && player.lastHitBy !== player) {
@@ -2713,6 +3231,9 @@ function renderSingle() {
   // Obstacles
   drawObstacles(ctx);
 
+  // Wormholes
+  drawWormholes(ctx);
+
   // Orbs
   for (const orb of orbs) orb.draw(ctx);
 
@@ -2724,6 +3245,9 @@ function renderSingle() {
 
   // Player
   if (player) player.draw(ctx);
+
+  // Aim indicator (under tentacle)
+  drawTentacleAimIndicator(ctx, player);
 
   // Tentacles
   if (player && player.tentacle) drawAttackTentacle(ctx, player.tentacle);
@@ -2745,6 +3269,9 @@ function renderSingle() {
   drawEffects(ctx);
 
   ctx.restore();
+
+  // wormhole lensing / distortion overlay (screen-space)
+  drawWormholeDistortionOverlay(ctx);
 
   // danger vignette when Chronovore is near player
   if (WORM_ENABLED && timeWorm && player && player.timeRemaining > 0) {
@@ -2836,22 +3363,22 @@ function init() {
 
   canvas.addEventListener("contextmenu", e => e.preventDefault());
 
-  dom.btnSingle.addEventListener("click", () => {
+  if (dom.btnSingle) dom.btnSingle.addEventListener("click", () => {
     musicUnlock();
     startSinglePlayer();
   });
 
-  dom.btnMulti.addEventListener("click", () => {
+  if (dom.btnMulti) dom.btnMulti.addEventListener("click", () => {
     musicUnlock();
     showMultiplayerComingSoon();
   });
 
-  dom.btnExit.addEventListener("click", () => {
+  if (dom.btnExit) dom.btnExit.addEventListener("click", () => {
     musicUnlock();
     showMenu();
   });
 
-  dom.btnBackFromMulti.addEventListener("click", () => {
+  if (dom.btnBackFromMulti) dom.btnBackFromMulti.addEventListener("click", () => {
     musicUnlock();
     showMenu();
   });

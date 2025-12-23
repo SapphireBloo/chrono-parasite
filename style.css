@@ -25,12 +25,12 @@ body {
 /* Canvas styling */
 #gameCanvas {
   width: 100%;
-  height: auto;
-  max-height: 100%;
+  height: 100%;
   border: 2px solid #222;
   background: radial-gradient(circle at center, #101826, #05070a);
   display: block;
 }
+
 
 /* UI overlay container (sits on top of canvas) */
 #ui-container {
@@ -604,6 +604,29 @@ body {
   box-shadow: 0 10px 26px rgba(0,0,0,0.65);
   pointer-events: auto;    /* clickable even though #ui-container is none */
 }
+
+.music-hud .music-title-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.music-hud .music-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #9aa4b7;
+}
+
+.music-hud .music-controls-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+
 
 .music-hud .music-title {
   font-size: 11px;
