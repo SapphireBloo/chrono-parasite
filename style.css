@@ -299,6 +299,7 @@ body {
   position: absolute;
   top: 52px;
   left: 16px;
+  z-index: 2;
   min-width: 200px;
   max-width: 240px;
   padding: 8px 10px;
@@ -482,6 +483,113 @@ body {
 /* Slight color accent when fully ready */
 .ability-slot.ability-ready {
   border-color: rgba(50, 224, 255, 0.9);
+}
+
+/* ======================
+   OVERLAY PANELS (pause / results)
+   ====================== */
+
+#pause-panel,
+#results-panel {
+  background: rgba(3, 5, 9, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.overlay-box {
+  min-width: 340px;
+  max-width: 440px;
+  padding: 24px 28px;
+  border-radius: 12px;
+  background: rgba(5, 7, 10, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.9);
+  text-align: center;
+}
+
+.overlay-box h2 {
+  font-size: 28px;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.overlay-sub {
+  font-size: 13px;
+  color: #b0b8c6;
+  margin-bottom: 16px;
+}
+
+.overlay-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 18px;
+}
+
+.overlay-actions button {
+  padding: 9px 18px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  background: #2b59ff;
+  color: #ffffff;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.overlay-actions button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+}
+
+.overlay-actions button.secondary {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.overlay-hint {
+  margin-top: 12px;
+  font-size: 11px;
+  color: #6e7685;
+}
+
+/* Results stat rows */
+
+#results-stats {
+  margin: 4px 0 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 8px 0;
+}
+
+.result-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 4px 2px;
+  font-size: 13px;
+}
+
+.result-label {
+  color: #9aa4b7;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+}
+
+.result-value {
+  color: #f5f5f5;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+#results-best {
+  font-size: 12px;
+  color: #9aa4b7;
+}
+
+#results-best.is-record {
+  color: #5ad08a;
+  font-weight: 600;
 }
 
 /* ======================
@@ -691,6 +799,23 @@ body {
   font-size: 11px;
   color: #9aa4b7;
   text-align: right;
+}
+
+/* Divider between the music block and the SFX block */
+.music-hud .sfx-divider {
+  height: 1px;
+  margin: 10px 0 8px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.music-hud .sfx-hint {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #9aa4b7;
 }
 
 /* Optional: subtle “playing” glow class you can toggle from JS */

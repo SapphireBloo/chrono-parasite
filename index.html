@@ -38,6 +38,26 @@
               value="0.55"
             />
           </div>
+
+          <div class="sfx-divider"></div>
+
+          <div class="music-controls-row">
+            <button id="sfx-mute-menu" class="music-btn" type="button">SFX On</button>
+            <span class="sfx-hint">Effects</span>
+          </div>
+
+          <div class="music-volume-row">
+            <label class="music-vol-label" for="sfx-volume-menu">Vol</label>
+            <input
+              id="sfx-volume-menu"
+              class="music-volume"
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value="0.5"
+            />
+          </div>
         </div>
         <!-- ✅ END MENU MUSIC HUD -->
 
@@ -129,6 +149,26 @@
       value="0.55"
     />
   </div>
+
+  <div class="sfx-divider"></div>
+
+  <div class="music-controls-row">
+    <button id="sfx-mute-hud" class="music-btn" type="button">SFX On</button>
+    <span class="sfx-hint">Effects</span>
+  </div>
+
+  <div class="music-volume-row">
+    <label class="music-vol-label" for="sfx-volume-hud">Vol</label>
+    <input
+      id="sfx-volume-hud"
+      class="music-volume"
+      type="range"
+      min="0"
+      max="1"
+      step="0.01"
+      value="0.5"
+    />
+  </div>
 </div>
 <!-- ✅ END IN-GAME MUSIC HUD -->
 
@@ -164,6 +204,37 @@
             <div class="cooldown-overlay"></div>
             <div class="ability-key">SPACE</div>
           </div>
+        </div>
+      </div>
+
+      <!-- PAUSE OVERLAY -->
+      <div id="pause-panel" class="panel hidden">
+        <div class="overlay-box">
+          <h2>Paused</h2>
+          <p class="overlay-sub">The arena is holding its breath.</p>
+          <div class="overlay-actions">
+            <button id="btn-resume">Resume</button>
+            <button id="btn-pause-exit" class="secondary">Exit to Menu</button>
+          </div>
+          <p class="overlay-hint">Press <strong>Esc</strong> to resume.</p>
+        </div>
+      </div>
+
+      <!-- RUN RESULTS -->
+      <div id="results-panel" class="panel hidden">
+        <div class="overlay-box">
+          <h2>Time's Up</h2>
+          <p id="results-cause" class="overlay-sub"></p>
+
+          <div id="results-stats"></div>
+
+          <p id="results-best"></p>
+
+          <div class="overlay-actions">
+            <button id="btn-play-again">Play Again</button>
+            <button id="btn-results-exit" class="secondary">Exit to Menu</button>
+          </div>
+          <p class="overlay-hint">Press <strong>R</strong> to run it back.</p>
         </div>
       </div>
 
@@ -209,12 +280,59 @@
           </div>
 
           <div class="how-section">
+            <h3>The Chronovore</h3>
+            <p>
+              A segmented worm roams the arena and it does not negotiate.
+              Touching any part of it is an instant kill, and your banked time
+              scatters across the floor as orbs for everyone else.
+            </p>
+            <ul>
+              <li>The screen edges bleed red and the camera shakes as it closes in.</li>
+              <li>It picks targets loosely — leaders and nearby parasites are likelier, but it roams too.</li>
+              <li>Watch the red trail on the minimap to read where it's heading.</li>
+            </ul>
+          </div>
+
+          <div class="how-section">
+            <h3>Wormholes</h3>
+            <p>
+              The spinning rifts are neutral teleporters. Touch one and you're
+              dropped somewhere safe and random. There's a short cooldown before
+              you can use another, so don't count on chaining them.
+            </p>
+            <ul>
+              <li>The best panic button when the Chronovore has your scent.</li>
+              <li>The camera tugs toward a rift as you approach — that's your range warning.</li>
+            </ul>
+          </div>
+
+          <div class="how-section">
+            <h3>Tether Movement</h3>
+            <p>
+              Fire your tentacle at a rock instead of a parasite and you'll anchor
+              to it, gaining a large speed boost while attached. Anyone you bump
+              into while tethered is knocked away and staggered.
+            </p>
+          </div>
+
+          <div class="how-section">
+            <h3>Interface</h3>
+            <ul>
+              <li><strong>Minimap (bottom-left):</strong> orbs, rifts, rivals, and the Chronovore's trail.</li>
+              <li><strong>Leaderboard (top-left):</strong> live standings — time banked plus kills.</li>
+              <li><strong>Esc:</strong> pause. <strong>R:</strong> restart after death.</li>
+            </ul>
+          </div>
+
+          <div class="how-section">
             <h3>Tips</h3>
             <ul>
               <li>Eat orbs early to reach Adult quickly.</li>
               <li>Use Tentacle at max range to stay safer.</li>
               <li>Dash is high risk, high reward — use it to finish weakened enemies.</li>
               <li>Elder shield can turn an enemy’s attack into your advantage.</li>
+              <li>Time is both your health and your score — spending it on abilities is a real gamble.</li>
+              <li>Let the Chronovore thin out the leaders, then feed on the orbs it leaves behind.</li>
             </ul>
           </div>
 
@@ -222,17 +340,12 @@
         </div>
       </div>
 
-      <!-- ✅ AUDIO TAGS (your two tracks) -->
-      <!-- Put your .mp3/.ogg files in the same folder, or update the src paths -->
-      <audio id="bg-music" preload="auto" crossorigin="anonymous">
-  <source src="assets/audio/quake-aavirall-main-version-33794-02-15.mp3" type="audio/mpeg" />
-</audio>
-
-<audio id="bg-music" preload="auto" crossorigin="anonymous">
-  <source src="assets/audio/shadow-runner-mountaineer-main-version-21965-02-22.mp3" type="audio/mpeg" />
-</audio>
-
-      <!-- ✅ END AUDIO TAGS -->
+      <!-- AUDIO -->
+      <!-- One element only. Duplicate ids meant getElementById always returned
+           the first, the second was dead weight, and both preloaded a full MP3.
+           Track sources come from MUSIC_TRACKS in main.js. -->
+      <audio id="bg-music" preload="none" crossorigin="anonymous"></audio>
+      <!-- END AUDIO -->
 
     </div>
   </div>

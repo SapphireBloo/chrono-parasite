@@ -64,6 +64,11 @@ const DASH_COOLDOWN = 3.0;
 // Leaderboard scoring – how much each kill is "worth" in seconds
 const KILL_WEIGHT_FOR_LEADERBOARD = 60;
 
+// ===== Frame timing =====
+// Hard ceiling on a single frame's delta. Without this, tabbing away for 10s
+// comes back as dt = 10 and every entity teleports across the map.
+const MAX_DT = 0.05;
+
 // ===== Barriers / Obstacles =====
 const OBSTACLE_COUNT = 12;
 const OBSTACLE_RADIUS_MIN = 28;
@@ -142,6 +147,10 @@ const WORM_BURST_SCATTER = 120;    // how far time burst orbs scatter
 const WORM_BURST_MIN_ORBS = 4;
 const WORM_BURST_MAX_ORBS = 16;
 
+// ===== Bot behaviour =====
+const BOT_WORM_FEAR_RADIUS = 480;    // start fleeing the Chronovore at this range
+const BOT_ENGAGE_RATIO = 0.75;       // only attack if my time > theirs * this
+
 // ===== Chronovore Targeting Behavior =====
 const WORM_TARGET_REEVAL_MIN = 1.4;     // seconds
 const WORM_TARGET_REEVAL_MAX = 3.2;
@@ -179,6 +188,213 @@ const BOT_NAMES = [
   "Rusty Stopwatch",
   "Time Taxman"
 ];
+
+// =====================
+// SOUND EFFECTS (WebAudio, synthesised — no asset files needed)
+// =====================
+const SFX_STORAGE_KEY = "chrono_parasite_sfx_v1";
+
+// Only play positional sounds within this radius of the player, so six bots
+// brawling across the map don't turn into a wall of noise.
+const SFX_AUDIBLE_RANGE = 900;
+
+const sfxState = {
+  ctx: null,
+  master: null,
+  volume: 0.5,
+  muted: false
+};
+
+// name -> { wave, f0, f1, dur, gain, noise }
+const SFX_DEFS = {
+  orb:      { wave: "sine",     f0: 660,  f1: 1180, dur: 0.10, gain: 0.22 },
+  tentacle: { wave: "sawtooth", f0: 320,  f1: 140,  dur: 0.16, gain: 0.16 },
+  latch:    { wave: "square",   f0: 180,  f1: 320,  dur: 0.12, gain: 0.14 },
+  dash:     { wave: "sawtooth", f0: 180,  f1: 620,  dur: 0.14, gain: 0.18 },
+  impact:   { wave: "square",   f0: 220,  f1: 60,   dur: 0.22, gain: 0.26, noise: 0.5 },
+  miss:     { wave: "sine",     f0: 300,  f1: 110,  dur: 0.24, gain: 0.16 },
+  shield:   { wave: "triangle", f0: 520,  f1: 880,  dur: 0.18, gain: 0.18 },
+  parry:    { wave: "square",   f0: 880,  f1: 1500, dur: 0.16, gain: 0.22 },
+  warp:     { wave: "sine",     f0: 900,  f1: 120,  dur: 0.34, gain: 0.20 },
+  devour:   { wave: "sawtooth", f0: 140,  f1: 40,   dur: 0.55, gain: 0.30, noise: 0.7 },
+  death:    { wave: "triangle", f0: 260,  f1: 45,   dur: 0.80, gain: 0.28 }
+};
+
+function sfxLoadSettings() {
+  try {
+    const raw = localStorage.getItem(SFX_STORAGE_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (typeof s.volume === "number") sfxState.volume = clamp(s.volume, 0, 1);
+    if (typeof s.muted === "boolean") sfxState.muted = s.muted;
+  } catch {}
+}
+
+function sfxSaveSettings() {
+  try {
+    localStorage.setItem(SFX_STORAGE_KEY, JSON.stringify({
+      volume: sfxState.volume,
+      muted: sfxState.muted
+    }));
+  } catch {}
+}
+
+// Browsers won't let us create/resume an AudioContext before a user gesture,
+// so this is called lazily from the same unlock path the music uses.
+function sfxEnsureContext() {
+  if (sfxState.ctx) {
+    if (sfxState.ctx.state === "suspended") sfxState.ctx.resume().catch(() => {});
+    return sfxState.ctx;
+  }
+
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+
+  try {
+    sfxState.ctx = new AC();
+    sfxState.master = sfxState.ctx.createGain();
+    sfxState.master.gain.value = sfxState.muted ? 0 : sfxState.volume;
+    sfxState.master.connect(sfxState.ctx.destination);
+  } catch {
+    sfxState.ctx = null;
+  }
+  return sfxState.ctx;
+}
+
+function sfxApply() {
+  if (sfxState.master) {
+    sfxState.master.gain.value = sfxState.muted ? 0 : sfxState.volume;
+  }
+}
+
+function sfxSetVolume(v) {
+  sfxState.volume = clamp(v, 0, 1);
+  sfxApply();
+  sfxSaveSettings();
+  sfxUpdateUI();
+}
+
+function sfxToggleMute() {
+  sfxState.muted = !sfxState.muted;
+  sfxApply();
+  sfxSaveSettings();
+  sfxUpdateUI();
+}
+
+function sfxUpdateUI() {
+  const text = sfxState.muted ? "SFX Off" : "SFX On";
+  for (const scope of ["menu", "hud"]) {
+    const btn = document.getElementById(`sfx-mute-${scope}`);
+    if (btn) btn.textContent = text;
+    const vol = document.getElementById(`sfx-volume-${scope}`);
+    if (vol) vol.value = String(sfxState.volume);
+  }
+}
+
+// Short buffer of white noise, reused for percussive layers.
+let sfxNoiseBuffer = null;
+function sfxGetNoiseBuffer(ctx) {
+  if (sfxNoiseBuffer) return sfxNoiseBuffer;
+  const len = Math.floor(ctx.sampleRate * 0.4);
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  sfxNoiseBuffer = buf;
+  return buf;
+}
+
+/**
+ * playSfx(name, source)
+ * `source` is optional. When given, the sound is skipped or attenuated based on
+ * how far that blob is from the player.
+ */
+function playSfx(name, source) {
+  if (sfxState.muted) return;
+
+  const def = SFX_DEFS[name];
+  if (!def) return;
+
+  let falloff = 1;
+  if (source && source !== player && player) {
+    const d = distance(source.x, source.y, player.x, player.y);
+    if (d > SFX_AUDIBLE_RANGE) return;
+    falloff = 1 - (d / SFX_AUDIBLE_RANGE);
+    falloff *= falloff;
+  }
+
+  const ctxA = sfxEnsureContext();
+  if (!ctxA || ctxA.state !== "running") return;
+
+  const now = ctxA.currentTime;
+  const peak = def.gain * falloff;
+  if (peak <= 0.001) return;
+
+  const env = ctxA.createGain();
+  env.gain.setValueAtTime(0.0001, now);
+  env.gain.exponentialRampToValueAtTime(peak, now + 0.012);
+  env.gain.exponentialRampToValueAtTime(0.0001, now + def.dur);
+  env.connect(sfxState.master);
+
+  const osc = ctxA.createOscillator();
+  osc.type = def.wave;
+  osc.frequency.setValueAtTime(def.f0, now);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(20, def.f1), now + def.dur);
+  osc.connect(env);
+  osc.start(now);
+  osc.stop(now + def.dur + 0.02);
+
+  if (def.noise) {
+    const src = ctxA.createBufferSource();
+    src.buffer = sfxGetNoiseBuffer(ctxA);
+
+    const filt = ctxA.createBiquadFilter();
+    filt.type = "lowpass";
+    filt.frequency.setValueAtTime(1400, now);
+    filt.frequency.exponentialRampToValueAtTime(220, now + def.dur);
+
+    const ng = ctxA.createGain();
+    ng.gain.setValueAtTime(peak * def.noise, now);
+    ng.gain.exponentialRampToValueAtTime(0.0001, now + def.dur);
+
+    src.connect(filt);
+    filt.connect(ng);
+    ng.connect(sfxState.master);
+    src.start(now);
+    src.stop(now + def.dur + 0.02);
+  }
+}
+
+function initSfxSystem() {
+  sfxLoadSettings();
+  sfxUpdateUI();
+
+  const wire = (scope) => {
+    const btn = document.getElementById(`sfx-mute-${scope}`);
+    const vol = document.getElementById(`sfx-volume-${scope}`);
+
+    if (btn) {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        sfxEnsureContext();
+        sfxToggleMute();
+        if (!sfxState.muted) playSfx("orb");
+      });
+    }
+
+    if (vol) {
+      vol.addEventListener("input", (e) => {
+        e.stopPropagation();
+        sfxEnsureContext();
+        const v = parseFloat(e.target.value);
+        if (!Number.isNaN(v)) sfxSetVolume(v);
+      });
+    }
+  };
+
+  wire("menu");
+  wire("hud");
+}
 
 // =====================
 // MUSIC SYSTEM
@@ -311,6 +527,9 @@ function musicSetVolume(v) {
 }
 
 function musicUnlock() {
+  // Same user-gesture requirement applies to WebAudio, so unlock both here.
+  sfxEnsureContext();
+
   if (musicState.unlocked) return;
   musicState.unlocked = true;
   musicTryPlay();
@@ -480,8 +699,8 @@ let timeWorm = null;
 // Simple camera that follows the player
 const camera = { x: 0, y: 0 };
 
-// Dash is still global (one dash at a time total)
-let activeDash = null;
+// Dashes and ability cooldowns now live on each blob (see BlobBase),
+// so the player and every bot can act independently.
 
 // Mouse position in SCREEN space (relative to canvas)
 let mouseScreenX = 0;
@@ -489,6 +708,9 @@ let mouseScreenY = 0;
 
 // For parasite animation + FX timing
 let gameTime = 0;
+
+// How long the current run has lasted (seconds of real play, pause excluded)
+let runElapsed = 0;
 
 // Simple FX manager
 let effects = [];
@@ -500,29 +722,62 @@ let previewCtx = null;
 // DOM cache
 const dom = {};
 
+// Paused state (Escape toggles it during a run)
+let paused = false;
+
 // Input
 const keys = {};
+
+// True when the user is typing into a form field, so game keybinds must stand down.
+function isTypingTarget(el) {
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+}
+
+function clearAllKeys() {
+  for (const k in keys) keys[k] = false;
+}
+
 window.addEventListener("keydown", e => {
+  // Don't eat keystrokes meant for the name field. Previously Space was
+  // preventDefault()ed globally, which made it impossible to type a space
+  // into the Parasite Name input.
+  if (isTypingTarget(e.target)) return;
+
   keys[e.key.toLowerCase()] = true;
 
-  // Space = Elder shield only
-  if (e.code === "Space") {
-    e.preventDefault();
-    tryUseShield(); // player only
-  }
+  const k = e.key.toLowerCase();
 
-  // Simple restart shortcut in single player
-  if (currentScreen === "single" && gameOver && e.key.toLowerCase() === "r") {
-    startSinglePlayer();
+  if (currentScreen === "single") {
+    // Space = Elder shield only
+    if (e.code === "Space") {
+      e.preventDefault();
+      tryUseShield(); // player only
+    }
+
+    // Escape = pause toggle (not while dead)
+    if (e.key === "Escape" && !gameOver) {
+      e.preventDefault();
+      togglePause();
+    }
+
+    // Simple restart shortcut in single player
+    if (gameOver && k === "r") {
+      startSinglePlayer();
+    }
   }
 });
+
 window.addEventListener("keyup", e => {
   keys[e.key.toLowerCase()] = false;
 });
 
-// Player cooldown timers
-let tentacleCooldown = 0;
-let dashCooldown = 0;
+// Alt-tabbing while holding a movement key used to leave that key stuck down.
+window.addEventListener("blur", clearAllKeys);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) clearAllKeys();
+});
 
 // =====================
 // BACKGROUND STATE
@@ -662,6 +917,46 @@ function getEnemiesFor(self) {
   }
 
   return enemies;
+}
+
+// Nearest point on the Chronovore to this blob, or null if the worm is inactive.
+function getWormThreatFor(blob) {
+  if (!WORM_ENABLED || !timeWorm || !blob || blob.timeRemaining <= 0) return null;
+  const info = getClosestWormPoint(blob.x, blob.y);
+  if (!info) return null;
+  return info;
+}
+
+// Returns the blob currently draining this one via a latched tentacle, if any.
+function isBeingDrained(blob) {
+  const all = player ? [player, ...bots] : bots;
+  for (const other of all) {
+    if (other === blob) continue;
+    const t = other.tentacle;
+    if (t && t.phase === "latched" && t.target === blob) return other;
+  }
+  return null;
+}
+
+// Closest wormhole that isn't in the direction of the threat.
+function findEscapeWormhole(blob, threat) {
+  let best = null;
+  let bestD = Infinity;
+
+  for (const w of wormholes) {
+    const d = distance(blob.x, blob.y, w.x, w.y);
+    if (d > 700) continue;
+
+    // The rift has to be meaningfully further from the threat than we are,
+    // otherwise "escaping" means running straight past the worm to reach it.
+    if (threat && distance(w.x, w.y, threat.x, threat.y) < threat.dist + 300) continue;
+
+    if (d < bestD) {
+      bestD = d;
+      best = w;
+    }
+  }
+  return best;
 }
 
 function findClosestEnemy(self, maxDistance = Infinity) {
@@ -897,6 +1192,17 @@ function cacheDom() {
 
   dom.leaderboard = document.getElementById("leaderboard");
 
+  dom.pausePanel = document.getElementById("pause-panel");
+  dom.btnResume = document.getElementById("btn-resume");
+  dom.btnPauseExit = document.getElementById("btn-pause-exit");
+
+  dom.resultsPanel = document.getElementById("results-panel");
+  dom.resultsCause = document.getElementById("results-cause");
+  dom.resultsStats = document.getElementById("results-stats");
+  dom.resultsBest = document.getElementById("results-best");
+  dom.btnPlayAgain = document.getElementById("btn-play-again");
+  dom.btnResultsExit = document.getElementById("btn-results-exit");
+
   // Ability HUD elements
   dom.abilityTentacle = document.getElementById("ability-tentacle");
   dom.abilityDash = document.getElementById("ability-dash");
@@ -955,8 +1261,35 @@ function cacheDom() {
 class Orb {
   constructor(xOverride, yOverride) {
     this.radius = ORB_RADIUS;
-    this.x = (typeof xOverride === "number") ? xOverride : randRange(this.radius, WORLD_WIDTH - this.radius);
-    this.y = (typeof yOverride === "number") ? yOverride : randRange(this.radius, WORLD_HEIGHT - this.radius);
+
+    // Explicit placement (Chronovore time-burst) bypasses the search.
+    if (typeof xOverride === "number" && typeof yOverride === "number") {
+      this.x = xOverride;
+      this.y = yOverride;
+      return;
+    }
+
+    // Reject spots buried inside an obstacle or sitting on a wormhole mouth.
+    const pad = this.radius + 8;
+    for (let tries = 0; tries < 30; tries++) {
+      const x = randRange(pad, WORLD_WIDTH - pad);
+      const y = randRange(pad, WORLD_HEIGHT - pad);
+
+      if (pointInsideObstacle(x, y, pad)) continue;
+
+      let onWormhole = false;
+      for (const w of wormholes) {
+        if (distance(x, y, w.x, w.y) < w.r + 24) { onWormhole = true; break; }
+      }
+      if (onWormhole) continue;
+
+      this.x = x;
+      this.y = y;
+      return;
+    }
+
+    this.x = randRange(pad, WORLD_WIDTH - pad);
+    this.y = randRange(pad, WORLD_HEIGHT - pad);
   }
 
   draw(ctx) {
@@ -1031,9 +1364,19 @@ class BlobBase {
     // Tentacle (per-blob)
     this.tentacle = null;
 
+    // Dash (per-blob) — was a single global, which meant one dash at a time
+    // across the entire world.
+    this.dash = null;
+
+    // Per-blob ability cooldowns (bots previously had none at all)
+    this.tentacleCooldown = 0;
+    this.dashCooldown = 0;
+
     // Combat / scoring
     this.kills = 0;
+    this.orbsCollected = 0;
     this.lastHitBy = null;
+    this.deathCause = null;
 
     // Tether bump gating
     this.tetherBumpCooldown = 0;
@@ -1097,6 +1440,14 @@ class BlobBase {
     if (this.tetherBumpCooldown > 0) {
       this.tetherBumpCooldown -= dt;
       if (this.tetherBumpCooldown < 0) this.tetherBumpCooldown = 0;
+    }
+    if (this.tentacleCooldown > 0) {
+      this.tentacleCooldown -= dt;
+      if (this.tentacleCooldown < 0) this.tentacleCooldown = 0;
+    }
+    if (this.dashCooldown > 0) {
+      this.dashCooldown -= dt;
+      if (this.dashCooldown < 0) this.dashCooldown = 0;
     }
 
     this.ageState = getAgeState(this.timeRemaining);
@@ -1276,7 +1627,7 @@ class Player extends BlobBase {
       return;
     }
 
-    if (activeDash && activeDash.source === this && activeDash.phase === "dashing") {
+    if (this.dash && this.dash.phase === "dashing") {
       this.clampToWorld();
       resolveBlobObstacleCollisions(this);
       return;
@@ -1335,7 +1686,38 @@ class Bot extends BlobBase {
 
     const LOW_TIME_THRESHOLD = 40;
 
-    if (this.changeDirCooldown <= 0) {
+    // --- Threat checks run every frame, not on the 0.7-2.0s decision timer.
+    // A bot that only re-thinks twice a second walks straight into the worm.
+    const wormThreat = getWormThreatFor(this);
+    const beingDrained = isBeingDrained(this);
+
+    if (wormThreat && wormThreat.dist < BOT_WORM_FEAR_RADIUS) {
+      // Sprint directly away from the nearest worm segment.
+      const dx = this.x - wormThreat.x;
+      const dy = this.y - wormThreat.y;
+      const mag = Math.hypot(dx, dy) || 1;
+      this.dirX = dx / mag;
+      this.dirY = dy / mag;
+      this.changeDirCooldown = 0.12;
+
+      // If a wormhole is close and roughly out of the worm's path, bolt for it.
+      const escape = findEscapeWormhole(this, wormThreat);
+      if (escape) {
+        const ex = escape.x - this.x;
+        const ey = escape.y - this.y;
+        const em = Math.hypot(ex, ey) || 1;
+        this.dirX = ex / em;
+        this.dirY = ey / em;
+      }
+    } else if (beingDrained) {
+      // Break the tether by running past the break range instead of standing there.
+      const dx = this.x - beingDrained.x;
+      const dy = this.y - beingDrained.y;
+      const mag = Math.hypot(dx, dy) || 1;
+      this.dirX = dx / mag;
+      this.dirY = dy / mag;
+      this.changeDirCooldown = 0.2;
+    } else if (this.changeDirCooldown <= 0) {
       this.changeDirCooldown = randRange(0.7, 2.0);
 
       let targetOrb = null;
@@ -1356,10 +1738,20 @@ class Bot extends BlobBase {
         const dx = targetOrb.x - this.x;
         const dy = targetOrb.y - this.y;
         angle = Math.atan2(dy, dx) + randRange(-0.3, 0.3);
-      } else if (closestEnemy && enemyDist < 900) {
+      } else if (
+        closestEnemy &&
+        enemyDist < 900 &&
+        // Don't pick fights you're losing — disengage when clearly weaker.
+        this.timeRemaining > closestEnemy.timeRemaining * BOT_ENGAGE_RATIO
+      ) {
         const dx = closestEnemy.x - this.x;
         const dy = closestEnemy.y - this.y;
         angle = Math.atan2(dy, dx) + randRange(-0.25, 0.25);
+      } else if (closestEnemy && enemyDist < 320) {
+        // Weaker and cornered: back off rather than trade.
+        const dx = this.x - closestEnemy.x;
+        const dy = this.y - closestEnemy.y;
+        angle = Math.atan2(dy, dx) + randRange(-0.4, 0.4);
       } else if (targetOrb && bestOrbDist < 800) {
         const dx = targetOrb.x - this.x;
         const dy = targetOrb.y - this.y;
@@ -1383,7 +1775,7 @@ class Bot extends BlobBase {
     const enemies = getEnemiesFor(this);
 
     // Tentacle
-    if (!this.tentacle && enemies.length > 0 && Math.random() < dt * 0.4 && this.timeRemaining > TENTACLE_COST) {
+    if (!this.tentacle && this.tentacleCooldown <= 0 && enemies.length > 0 && Math.random() < dt * 0.4 && this.timeRemaining > TENTACLE_COST) {
       const { enemy: tentacleTarget } = findClosestEnemy(this, TENTACLE_MAX_RANGE * 1.1);
       if (tentacleTarget) {
         if (hasLineOfSight(this, tentacleTarget)) {
@@ -1395,7 +1787,7 @@ class Bot extends BlobBase {
     }
 
     // Dash
-    if (!activeDash && (this.ageState === "Adult" || this.ageState === "Elder") && enemies.length > 0) {
+    if (!this.dash && this.dashCooldown <= 0 && (this.ageState === "Adult" || this.ageState === "Elder") && enemies.length > 0) {
       if (Math.random() < dt * 0.25 && this.timeRemaining > DASH_COST) {
         const { enemy: dashTarget } = findClosestEnemy(this, 600);
         if (dashTarget) {
@@ -1510,6 +1902,15 @@ function findSafeTeleportPoint(blob) {
 }
 
 function handleWormholeTeleport(blob) {
+  const wasAt = blob ? { x: blob.x, y: blob.y } : null;
+  const result = handleWormholeTeleportInner(blob);
+  if (wasAt && blob && (blob.x !== wasAt.x || blob.y !== wasAt.y)) {
+    playSfx("warp", blob);
+  }
+  return result;
+}
+
+function handleWormholeTeleportInner(blob) {
   if (!blob || blob.timeRemaining <= 0) return;
   if (blob.teleportCooldown > 0) return;
 
@@ -1717,7 +2118,7 @@ function drawTentacleAimIndicator(ctx, blob) {
   if (blob !== player) return; // player-only
   if (gameOver) return;
   if (blob.stunTimer > 0) return;
-  if (activeDash && activeDash.source === blob && activeDash.phase === "dashing") return;
+  if (blob.dash && blob.dash.phase === "dashing") return;
 
   // world mouse position
   const mx = mouseScreenX - CANVAS_WIDTH / 2 + camera.x;
@@ -2116,6 +2517,9 @@ function killByWorm(blob, x, y) {
 
   // credit: nobody gets kills; it's a hazard
   blob.lastHitBy = null;
+  blob.deathCause = `Devoured by the ${WORM_NAME}.`;
+
+  playSfx("devour", blob);
 }
 
 function drawTimeWorm(ctx) {
@@ -2262,15 +2666,274 @@ function drawTimeWorm(ctx) {
 }
 
 // =====================
+// PAUSE
+// =====================
+function togglePause() {
+  if (currentScreen !== "single" || gameOver) return;
+  paused = !paused;
+
+  if (paused) {
+    clearAllKeys();
+    showPauseOverlay();
+  } else {
+    hidePauseOverlay();
+  }
+}
+
+function showPauseOverlay() {
+  if (dom.pausePanel) dom.pausePanel.classList.remove("hidden");
+}
+
+function hidePauseOverlay() {
+  if (dom.pausePanel) dom.pausePanel.classList.add("hidden");
+}
+
+// =====================
+// RUN RESULTS
+// =====================
+const BEST_RUN_STORAGE_KEY = "chrono_parasite_best_v1";
+
+function loadBestRun() {
+  try {
+    const raw = localStorage.getItem(BEST_RUN_STORAGE_KEY);
+    if (!raw) return null;
+    const b = JSON.parse(raw);
+    if (typeof b.survived !== "number") return null;
+    return b;
+  } catch {
+    return null;
+  }
+}
+
+function saveBestRun(run) {
+  try {
+    localStorage.setItem(BEST_RUN_STORAGE_KEY, JSON.stringify(run));
+  } catch {}
+}
+
+function formatDuration(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
+function endRun() {
+  gameOver = true;
+  paused = false;
+  hidePauseOverlay();
+
+  if (player) player.dash = null;
+
+  playSfx("death");
+  showResultsPanel();
+}
+
+function showResultsPanel() {
+  if (!dom.resultsPanel || !player) return;
+
+  const survived = runElapsed;
+  const kills = player.kills || 0;
+  const orbsTaken = player.orbsCollected || 0;
+
+  // Where the player stood against the bots at the moment of death.
+  const board = [player, ...bots]
+    .slice()
+    .sort((a, b) => computeLeaderboardScore(b) - computeLeaderboardScore(a));
+  const leader = board[0];
+
+  let cause = player.deathCause;
+  if (!cause) {
+    cause = (player.lastHitBy && player.lastHitBy !== player)
+      ? `Drained dry by ${player.lastHitBy.name}.`
+      : "Your clock simply ran out.";
+  }
+
+  if (dom.resultsCause) dom.resultsCause.textContent = cause;
+
+  if (dom.resultsStats) {
+    dom.resultsStats.innerHTML = "";
+    const rows = [
+      ["Survived", formatDuration(survived)],
+      ["Kills", String(kills)],
+      ["Orbs absorbed", String(orbsTaken)],
+      ["Arena leader", leader ? `${leader.name} — ${Math.max(0, Math.floor(leader.timeRemaining))}s` : "—"]
+    ];
+    for (const [label, value] of rows) {
+      const row = document.createElement("div");
+      row.className = "result-row";
+
+      const l = document.createElement("span");
+      l.className = "result-label";
+      l.textContent = label;
+
+      const v = document.createElement("span");
+      v.className = "result-value";
+      v.textContent = value;
+
+      row.appendChild(l);
+      row.appendChild(v);
+      dom.resultsStats.appendChild(row);
+    }
+  }
+
+  // Personal best, keyed on survival time with kills as a tiebreaker.
+  const prev = loadBestRun();
+  const isBest =
+    !prev ||
+    survived > prev.survived ||
+    (Math.abs(survived - prev.survived) < 0.01 && kills > (prev.kills || 0));
+
+  if (isBest) {
+    saveBestRun({ survived, kills, orbs: orbsTaken, at: Date.now() });
+  }
+
+  if (dom.resultsBest) {
+    if (isBest) {
+      dom.resultsBest.textContent = prev
+        ? `New personal best — beat ${formatDuration(prev.survived)}.`
+        : "New personal best.";
+      dom.resultsBest.classList.add("is-record");
+    } else {
+      dom.resultsBest.textContent =
+        `Personal best: ${formatDuration(prev.survived)} with ${prev.kills || 0} kills.`;
+      dom.resultsBest.classList.remove("is-record");
+    }
+  }
+
+  dom.resultsPanel.classList.remove("hidden");
+}
+
+function hideResultsPanel() {
+  if (dom.resultsPanel) dom.resultsPanel.classList.add("hidden");
+}
+
+// =====================
+// MINIMAP
+// =====================
+const MINIMAP_SIZE = 168;
+const MINIMAP_MARGIN = 16;
+
+function drawMinimap(ctx) {
+  if (!player) return;
+
+  const size = MINIMAP_SIZE;
+  const x0 = MINIMAP_MARGIN;
+  const y0 = CANVAS_HEIGHT - size - MINIMAP_MARGIN;
+  const sx = size / WORLD_WIDTH;
+  const sy = size / WORLD_HEIGHT;
+
+  const toMapX = (wx) => x0 + wx * sx;
+  const toMapY = (wy) => y0 + wy * sy;
+
+  ctx.save();
+
+  // frame
+  ctx.fillStyle = "rgba(5, 7, 10, 0.82)";
+  ctx.strokeStyle = "rgba(255,255,255,0.16)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.rect(x0, y0, size, size);
+  ctx.fill();
+  ctx.stroke();
+
+  // clip everything else to the frame
+  ctx.beginPath();
+  ctx.rect(x0, y0, size, size);
+  ctx.clip();
+
+  // obstacles
+  ctx.fillStyle = "rgba(120, 140, 170, 0.28)";
+  for (const o of obstacles) {
+    ctx.beginPath();
+    ctx.arc(toMapX(o.x), toMapY(o.y), Math.max(1.5, o.r * sx), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // orbs (faint, so the map reads as "where's the food")
+  ctx.fillStyle = "rgba(120, 255, 230, 0.5)";
+  for (const orb of orbs) {
+    ctx.fillRect(toMapX(orb.x) - 0.75, toMapY(orb.y) - 0.75, 1.5, 1.5);
+  }
+
+  // wormholes
+  for (const w of wormholes) {
+    const g = w.color && w.color.glow ? w.color.glow : [120, 200, 255];
+    ctx.strokeStyle = `rgba(${g[0]}, ${g[1]}, ${g[2]}, 0.9)`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(toMapX(w.x), toMapY(w.y), 3.2, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Chronovore, drawn as a line so you can read its heading at a glance
+  if (WORM_ENABLED && timeWorm && timeWorm.segments && timeWorm.segments.length > 1) {
+    ctx.strokeStyle = "rgba(255, 70, 70, 0.85)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < timeWorm.segments.length; i++) {
+      const s = timeWorm.segments[i];
+      const mx = toMapX(s.x);
+      const my = toMapY(s.y);
+      if (i === 0) ctx.moveTo(mx, my);
+      else ctx.lineTo(mx, my);
+    }
+    ctx.stroke();
+
+    const head = timeWorm.segments[0];
+    ctx.fillStyle = "rgba(255, 120, 120, 0.95)";
+    ctx.beginPath();
+    ctx.arc(toMapX(head.x), toMapY(head.y), 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // bots
+  for (const b of bots) {
+    if (b.timeRemaining <= 0) continue;
+    ctx.fillStyle = b.getColor();
+    ctx.beginPath();
+    ctx.arc(toMapX(b.x), toMapY(b.y), 2.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // player
+  if (player.timeRemaining > 0) {
+    const px = toMapX(player.x);
+    const py = toMapY(player.y);
+    ctx.fillStyle = player.getColor();
+    ctx.beginPath();
+    ctx.arc(px, py, 3.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(px, py, 5.4, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // current viewport rectangle
+  ctx.strokeStyle = "rgba(255,255,255,0.22)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(
+    toMapX(camera.x - CANVAS_WIDTH / 2),
+    toMapY(camera.y - CANVAS_HEIGHT / 2),
+    CANVAS_WIDTH * sx,
+    CANVAS_HEIGHT * sy
+  );
+
+  ctx.restore();
+}
+
+// =====================
 // SCREEN / MODE HANDLERS
 // =====================
 function showMenu() {
   currentScreen = "menu";
   gameOver = false;
-  activeDash = null;
+  paused = false;
   effects = [];
-  tentacleCooldown = 0;
-  dashCooldown = 0;
+  hidePauseOverlay();
+  hideResultsPanel();
 
   dom.mainMenu.classList.remove("hidden");
   dom.hud.classList.add("hidden");
@@ -2281,10 +2944,13 @@ function showMenu() {
 function startSinglePlayer() {
   currentScreen = "single";
   gameOver = false;
-  activeDash = null;
+  paused = false;
   effects = [];
-  tentacleCooldown = 0;
-  dashCooldown = 0;
+  runElapsed = 0;
+  clearAllKeys();
+  hidePauseOverlay();
+  hideResultsPanel();
+  buildLeaderboardHUD();
 
   const chosenColor = getSelectedColor();
   let chosenName =
@@ -2297,11 +2963,17 @@ function startSinglePlayer() {
   camera.x = player.x;
   camera.y = player.y;
 
-  spawnOrbs(ORB_COUNT);
+  // Order matters. Obstacles and wormholes define the terrain first; orbs and
+  // bots are then placed into whatever free space is left. Spawning orbs first
+  // (as before) buried a chunk of them inside rocks where nothing could reach.
   spawnObstacles(OBSTACLE_COUNT);
   spawnWormholes(WORMHOLE_COUNT);
+  spawnOrbs(ORB_COUNT);
   spawnBots(BOT_COUNT);
   spawnTimeWorm();
+
+  // A rock may have landed on the player's fixed centre spawn.
+  resolveBlobObstacleCollisions(player);
 
   dom.mainMenu.classList.add("hidden");
   dom.hud.classList.remove("hidden");
@@ -2311,10 +2983,10 @@ function startSinglePlayer() {
 
 function showMultiplayerComingSoon() {
   currentScreen = "multi";
-  activeDash = null;
+  paused = false;
   effects = [];
-  tentacleCooldown = 0;
-  dashCooldown = 0;
+  hidePauseOverlay();
+  hideResultsPanel();
 
   dom.mainMenu.classList.add("hidden");
   dom.hud.classList.add("hidden");
@@ -2335,7 +3007,9 @@ function spawnOrbs(count) {
 function spawnBots(count) {
   bots = [];
   for (let i = 0; i < count; i++) {
-    bots.push(new Bot());
+    const b = new Bot();
+    resolveBlobObstacleCollisions(b);
+    bots.push(b);
   }
 }
 
@@ -2345,6 +3019,9 @@ function handleOrbPickupFor(blob) {
     const distToOrb = distance(blob.x, blob.y, orb.x, orb.y);
     if (distToOrb < blob.radius + orb.radius) {
       blob.timeRemaining += ORB_VALUE;
+      blob.orbsCollected = (blob.orbsCollected || 0) + 1;
+
+      if (blob === player) playSfx("orb");
 
       spawnEffect({
         type: "orbPop",
@@ -2372,10 +3049,12 @@ function castShield(caster) {
 
   caster.shieldTimer = SHIELD_DURATION;
   caster.shieldCooldown = SHIELD_COOLDOWN;
+
+  playSfx("shield", caster);
 }
 
 function tryUseShield() {
-  if (currentScreen !== "single" || !player || gameOver) return;
+  if (currentScreen !== "single" || !player || gameOver || paused) return;
   if (player.ageState !== "Elder") return;
   castShield(player);
 }
@@ -2398,7 +3077,7 @@ function applyShieldParry(defender, attacker) {
 // ABILITIES (Tentacle / Dash)
 // =====================
 function tryUseTentacle() {
-  if (currentScreen !== "single" || !player || gameOver) return;
+  if (currentScreen !== "single" || !player || gameOver || paused) return;
 
   if (player.tentacle) {
     if (player.tentacle.phase === "retracting") {
@@ -2408,7 +3087,7 @@ function tryUseTentacle() {
     }
   }
 
-  if (tentacleCooldown > 0) return;
+  if (player.tentacleCooldown > 0) return;
   castTentacle(player);
 }
 
@@ -2452,9 +3131,9 @@ function castTentacle(caster, dirXOverride, dirYOverride) {
     remaining: 0
   };
 
-  if (caster === player) {
-    tentacleCooldown = TENTACLE_COOLDOWN;
-  }
+  caster.tentacleCooldown = TENTACLE_COOLDOWN;
+
+  playSfx("tentacle", caster);
 }
 
 function updateTentacleFor(blob, dt) {
@@ -2508,6 +3187,7 @@ function updateTentacleFor(blob, dt) {
           t.target = target;
           t.targetObstacle = null;
           t.phase = "latched";
+          playSfx("latch", source);
           t.remaining = TENTACLE_MAX_DURATION;
         }
         break;
@@ -2689,10 +3369,10 @@ function drawAttackTentacle(ctx, t) {
 
 // ---- Dash ----
 function tryUseDash() {
-  if (currentScreen !== "single" || !player || gameOver) return;
-  if (activeDash) return;
+  if (currentScreen !== "single" || !player || gameOver || paused) return;
+  if (player.dash) return;
   if (player.ageState === "Young") return;
-  if (dashCooldown > 0) return;
+  if (player.dashCooldown > 0) return;
   castDash(player);
 }
 
@@ -2725,7 +3405,7 @@ function castDash(caster, dirXOverride, dirYOverride) {
   caster.timeRemaining -= DASH_COST;
   if (caster.timeRemaining < 0) caster.timeRemaining = 0;
 
-  activeDash = {
+  caster.dash = {
     source: caster,
     dirX,
     dirY,
@@ -2734,18 +3414,23 @@ function castDash(caster, dirXOverride, dirYOverride) {
     hit: false
   };
 
-  if (caster === player) {
-    dashCooldown = DASH_COOLDOWN;
-  }
+  caster.dashCooldown = DASH_COOLDOWN;
+
+  playSfx("dash", caster);
 }
 
-function updateDash(dt) {
-  if (!activeDash) return;
+// Max distance a dash advances between collision checks. At 1300 px/s a whole
+// frame's movement can exceed a blob's radius, which let dashes tunnel straight
+// through targets; sub-stepping keeps every hit registering.
+const DASH_SUBSTEP = 8;
 
-  const d = activeDash;
-  const source = d.source;
+function updateDashFor(blob, dt) {
+  const d = blob.dash;
+  if (!d) return;
+
+  const source = d.source || blob;
   if (!source || source.timeRemaining <= 0) {
-    activeDash = null;
+    blob.dash = null;
     return;
   }
 
@@ -2753,44 +3438,52 @@ function updateDash(dt) {
     d.elapsed += dt;
 
     const moveDist = DASH_SPEED * dt;
-    source.x += d.dirX * moveDist;
-    source.y += d.dirY * moveDist;
-    source.clampToWorld();
-    resolveBlobObstacleCollisions(source);
+    const steps = Math.max(1, Math.ceil(moveDist / DASH_SUBSTEP));
+    const stepDist = moveDist / steps;
 
     const potentialTargets = getEnemiesFor(source);
 
-    for (const target of potentialTargets) {
-      if (target.timeRemaining <= 0) continue;
-      const distToTarget = distance(source.x, source.y, target.x, target.y);
-      if (distToTarget < source.radius + target.radius) {
-        d.phase = "ending";
+    for (let s = 0; s < steps && d.phase === "dashing"; s++) {
+      source.x += d.dirX * stepDist;
+      source.y += d.dirY * stepDist;
+      source.clampToWorld();
+      resolveBlobObstacleCollisions(source);
 
-        if (target.shieldTimer > 0) {
-          applyShieldParry(target, source);
-          d.hit = true;
-        } else {
-          d.hit = true;
+      for (const target of potentialTargets) {
+        if (target.timeRemaining <= 0) continue;
+        const distToTarget = distance(source.x, source.y, target.x, target.y);
+        if (distToTarget < source.radius + target.radius) {
+          d.phase = "ending";
 
-          target.timeRemaining -= DASH_HIT_DRAIN;
-          if (target.timeRemaining < 0) target.timeRemaining = 0;
+          if (target.shieldTimer > 0) {
+            applyShieldParry(target, source);
+            d.hit = true;
+            playSfx("parry");
+          } else {
+            d.hit = true;
 
-          target.lastHitBy = source;
-          source.timeRemaining += DASH_HIT_DRAIN * DASH_EFFICIENCY;
+            target.timeRemaining -= DASH_HIT_DRAIN;
+            if (target.timeRemaining < 0) target.timeRemaining = 0;
 
-          target.stunTimer = DASH_STUN_DURATION;
+            target.lastHitBy = source;
+            source.timeRemaining += DASH_HIT_DRAIN * DASH_EFFICIENCY;
 
-          spawnEffect({
-            type: "impactPulse",
-            x: target.x,
-            y: target.y,
-            startRadius: target.radius * 0.7,
-            growth: target.radius * 1.8,
-            age: 0,
-            lifetime: 0.25
-          });
+            target.stunTimer = DASH_STUN_DURATION;
+
+            if (source === player || target === player) playSfx("impact");
+
+            spawnEffect({
+              type: "impactPulse",
+              x: target.x,
+              y: target.y,
+              startRadius: target.radius * 0.7,
+              growth: target.radius * 1.8,
+              age: 0,
+              lifetime: 0.25
+            });
+          }
+          break;
         }
-        break;
       }
     }
 
@@ -2803,9 +3496,15 @@ function updateDash(dt) {
     if (!d.hit) {
       source.timeRemaining -= DASH_MISS_PENALTY;
       if (source.timeRemaining < 0) source.timeRemaining = 0;
+      if (source === player) playSfx("miss");
     }
-    activeDash = null;
+    blob.dash = null;
   }
+}
+
+function updateAllDashes(dt) {
+  if (player) updateDashFor(player, dt);
+  for (const b of bots) updateDashFor(b, dt);
 }
 
 // =====================
@@ -2868,42 +3567,81 @@ function computeLeaderboardScore(e) {
   return time + kills * KILL_WEIGHT_FOR_LEADERBOARD;
 }
 
+// Rows are built once and then updated via textContent. The old version
+// reassigned innerHTML every single frame — 60 full DOM reparses a second —
+// and interpolated the player-supplied name straight into markup.
+const LEADERBOARD_ROWS = 4;
+let lbRows = null;
+
+function buildLeaderboardHUD() {
+  if (!dom.leaderboard) return;
+
+  dom.leaderboard.innerHTML = "";
+  lbRows = [];
+
+  const title = document.createElement("div");
+  title.className = "lb-title";
+  title.textContent = "Time Leaderboard";
+  dom.leaderboard.appendChild(title);
+
+  for (let i = 0; i < LEADERBOARD_ROWS; i++) {
+    const row = document.createElement("div");
+    row.className = "lb-row";
+
+    const rank = document.createElement("span");
+    rank.className = "lb-rank";
+    rank.textContent = `${i + 1}.`;
+
+    const name = document.createElement("span");
+    name.className = "lb-name";
+
+    const time = document.createElement("span");
+    time.className = "lb-time";
+
+    const kills = document.createElement("span");
+    kills.className = "lb-kills";
+
+    row.appendChild(rank);
+    row.appendChild(name);
+    row.appendChild(time);
+    row.appendChild(kills);
+    dom.leaderboard.appendChild(row);
+
+    lbRows.push({ row, name, time, kills });
+  }
+}
+
 function renderLeaderboardHUD() {
   if (!dom.leaderboard) return;
+  if (!lbRows) buildLeaderboardHUD();
+  if (!lbRows) return;
 
   const entries = [];
   if (player) entries.push(player);
   for (const b of bots) entries.push(b);
 
-  if (entries.length === 0) {
-    dom.leaderboard.innerHTML = "";
-    return;
-  }
-
   entries.sort((a, b) => computeLeaderboardScore(b) - computeLeaderboardScore(a));
-  const topN = entries.slice(0, 4);
 
-  let html = '<div class="lb-title">Time Leaderboard</div>';
+  for (let i = 0; i < LEADERBOARD_ROWS; i++) {
+    const slot = lbRows[i];
+    const e = entries[i];
 
-  for (let i = 0; i < topN.length; i++) {
-    const e = topN[i];
+    if (!e) {
+      slot.row.style.display = "none";
+      continue;
+    }
+
+    slot.row.style.display = "";
+
     const isPlayer = e === player;
-    const rank = i + 1;
-    const name = e.name || (isPlayer ? "You" : "Bot");
-    const time = Math.max(0, Math.floor(e.timeRemaining));
-    const kills = e.kills || 0;
+    // textContent, so a name like "<img onerror=...>" is inert text.
+    slot.name.textContent = e.name || (isPlayer ? "You" : "Bot");
+    slot.time.textContent = `${Math.max(0, Math.floor(e.timeRemaining))}s`;
+    slot.kills.textContent = `K:${e.kills || 0}`;
 
-    html += `
-      <div class="lb-row ${isPlayer ? "lb-row-player" : ""} ${i === 0 ? "lb-row-top" : ""}">
-        <span class="lb-rank">${rank}.</span>
-        <span class="lb-name">${name}</span>
-        <span class="lb-time">${time}s</span>
-        <span class="lb-kills">K:${kills}</span>
-      </div>
-    `;
+    slot.row.classList.toggle("lb-row-player", isPlayer);
+    slot.row.classList.toggle("lb-row-top", i === 0);
   }
-
-  dom.leaderboard.innerHTML = html;
 }
 
 function updateHUD() {
@@ -2917,7 +3655,7 @@ function updateHUD() {
   // Tentacle
   if (dom.abilityTentacle && dom.coolTentacle) {
     const cdMax = TENTACLE_COOLDOWN;
-    const cd = tentacleCooldown;
+    const cd = player.tentacleCooldown;
     const onCooldown = cd > 0;
     const ratio = cdMax > 0 ? cd / cdMax : 0;
 
@@ -2933,7 +3671,7 @@ function updateHUD() {
     const usable = alive && hasAge;
 
     const cdMax = DASH_COOLDOWN;
-    const cd = dashCooldown;
+    const cd = player.dashCooldown;
     const onCooldown = cd > 0;
     const ratio = cdMax > 0 ? cd / cdMax : 0;
 
@@ -2969,16 +3707,36 @@ function resizeCanvas() {
   const canvasEl = document.getElementById("gameCanvas");
   const wrapper = document.getElementById("game-wrapper");
 
+  // CANVAS_WIDTH / CANVAS_HEIGHT stay in CSS pixels. The backing store is
+  // scaled by devicePixelRatio and the context is scaled to match, so all the
+  // existing drawing code keeps working while output is sharp on HiDPI.
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
   CANVAS_WIDTH = window.innerWidth;
   CANVAS_HEIGHT = window.innerHeight;
 
-  canvasEl.width = CANVAS_WIDTH;
-  canvasEl.height = CANVAS_HEIGHT;
+  canvasEl.width = Math.round(CANVAS_WIDTH * dpr);
+  canvasEl.height = Math.round(CANVAS_HEIGHT * dpr);
+  canvasEl.style.width = `${CANVAS_WIDTH}px`;
+  canvasEl.style.height = `${CANVAS_HEIGHT}px`;
+
+  // Setting width/height resets the transform, so reapply the DPR scale.
+  if (ctx && ctx.setTransform) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   wrapper.style.width = `${CANVAS_WIDTH}px`;
   wrapper.style.height = `${CANVAS_HEIGHT}px`;
 
   initBackground();
+}
+
+// Regenerating 260 stars on every resize event during a window drag is wasteful.
+let resizeTimer = null;
+function onResize() {
+  if (resizeTimer) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    resizeTimer = null;
+    resizeCanvas();
+  }, 120);
 }
 
 // =====================
@@ -3027,11 +3785,23 @@ function updateCamera() {
     }
   }
 
+  // Only clamp on an axis where the world is actually bigger than the viewport.
+  // On an ultrawide (viewport > 3000px) the old clamp had min > max, so it
+  // collapsed to a constant and the camera froze.
   const halfW = CANVAS_WIDTH / 2;
   const halfH = CANVAS_HEIGHT / 2;
 
-  camera.x = clamp(camera.x, halfW, WORLD_WIDTH - halfW);
-  camera.y = clamp(camera.y, halfH, WORLD_HEIGHT - halfH);
+  if (WORLD_WIDTH > CANVAS_WIDTH) {
+    camera.x = clamp(camera.x, halfW, WORLD_WIDTH - halfW);
+  } else {
+    camera.x = WORLD_WIDTH / 2;
+  }
+
+  if (WORLD_HEIGHT > CANVAS_HEIGHT) {
+    camera.y = clamp(camera.y, halfH, WORLD_HEIGHT - halfH);
+  } else {
+    camera.y = WORLD_HEIGHT / 2;
+  }
 }
 
 // =====================
@@ -3170,6 +3940,7 @@ function updateSingle(dt) {
   if (!player) return;
 
   if (!gameOver) {
+    runElapsed += dt;
     player.update(dt);
     handleOrbPickupFor(player);
     handleWormholeTeleport(player);
@@ -3182,7 +3953,7 @@ function updateSingle(dt) {
     }
 
     updateAllTentacles(dt);
-    updateDash(dt);
+    updateAllDashes(dt);
     handleTetherBoostBumps();
 
     // Chronovore updates + devour checks
@@ -3204,8 +3975,7 @@ function updateSingle(dt) {
     updateEffects(dt);
     updateCamera();
 
-    if (tentacleCooldown > 0) tentacleCooldown = Math.max(0, tentacleCooldown - dt);
-    if (dashCooldown > 0) dashCooldown = Math.max(0, dashCooldown - dt);
+    // Cooldowns now tick per blob inside applyTimeAndStatus().
 
     if (wormholeWarp && wormholeWarp.timer > 0) wormholeWarp.timer = Math.max(0, wormholeWarp.timer - dt);
 
@@ -3213,8 +3983,7 @@ function updateSingle(dt) {
       if (player.lastHitBy && player.lastHitBy !== player) {
         player.lastHitBy.kills = (player.lastHitBy.kills || 0) + 1;
       }
-      gameOver = true;
-      activeDash = null;
+      endRun();
     }
   }
 }
@@ -3259,17 +4028,17 @@ function renderSingle() {
   if (player && player.tentacle) drawAttackTentacle(ctx, player.tentacle);
   for (const bot of bots) if (bot.tentacle) drawAttackTentacle(ctx, bot.tentacle);
 
-  // Dash ring
-  if (activeDash && activeDash.phase === "dashing" && activeDash.source) {
-    const s = activeDash.source;
-    ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,0.4)";
-    ctx.lineWidth = 2;
+  // Dash rings (any blob can be dashing now)
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.4)";
+  ctx.lineWidth = 2;
+  for (const s of [player, ...bots]) {
+    if (!s || !s.dash || s.dash.phase !== "dashing") continue;
     ctx.beginPath();
     ctx.arc(s.x, s.y, s.radius + 6, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.restore();
   }
+  ctx.restore();
 
   // World-space FX
   drawEffects(ctx);
@@ -3291,7 +4060,15 @@ function renderSingle() {
     }
   }
 
-  if (gameOver) drawGameOver();
+  drawMinimap(ctx);
+
+  if (gameOver || paused) {
+    ctx.save();
+    ctx.fillStyle = paused ? "rgba(0,0,0,0.45)" : "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    ctx.restore();
+  }
+
   updateHUD();
 }
 
@@ -3299,10 +4076,16 @@ function renderSingle() {
 // MAIN GAME LOOP
 // =====================
 function gameLoop(timestamp) {
-  const dt = (timestamp - lastTimestamp) / 1000 || 0;
+  const rawDt = (timestamp - lastTimestamp) / 1000 || 0;
   lastTimestamp = timestamp;
 
-  gameTime = timestamp / 1000;
+  // Clamp the step and freeze it entirely while paused. Everything downstream
+  // is dt-driven, so dt = 0 renders a still frame without special-casing.
+  const dt = paused ? 0 : Math.min(rawDt, MAX_DT);
+
+  // Accumulate rather than reading the clock, so pausing actually stops
+  // the cosmetic animation (wobble, orb pulse) too.
+  gameTime += dt;
 
   updateBackground(dt);
 
@@ -3319,24 +4102,8 @@ function gameLoop(timestamp) {
   requestAnimationFrame(gameLoop);
 }
 
-function drawGameOver() {
-  ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-  ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "32px system-ui";
-  ctx.textAlign = "center";
-  ctx.fillText("Time's Up!", CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 10);
-
-  ctx.font = "18px system-ui";
-  ctx.fillText(
-    "Press R to restart or click 'Exit to Menu'",
-    CANVAS_WIDTH / 2,
-    CANVAS_HEIGHT / 2 + 24
-  );
-  ctx.restore();
-}
+// The end-of-run summary now lives in #results-panel (real stats, personal
+// best, buttons). The canvas only supplies the dim wash behind it.
 
 // =====================
 // INIT
@@ -3347,7 +4114,13 @@ function init() {
 
   cacheDom();
 
+  initSfxSystem();
   initMusicSystem();
+
+  if (dom.btnResume) dom.btnResume.addEventListener("click", () => togglePause());
+  if (dom.btnPauseExit) dom.btnPauseExit.addEventListener("click", () => showMenu());
+  if (dom.btnPlayAgain) dom.btnPlayAgain.addEventListener("click", () => startSinglePlayer());
+  if (dom.btnResultsExit) dom.btnResultsExit.addEventListener("click", () => showMenu());
 
   canvas.addEventListener("mousedown", () => {
     musicUnlock();
@@ -3405,7 +4178,7 @@ function init() {
     });
   }
 
-  window.addEventListener("resize", resizeCanvas);
+  window.addEventListener("resize", onResize);
 
   resizeCanvas();
   initBackground();
